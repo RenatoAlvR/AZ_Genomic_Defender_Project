@@ -1,0 +1,8 @@
+1. config.yaml → Main CLI parameters
+2. preprocessor.py → Handles 10x Genomics data (MTX + TSVs)
+   → Outputs: PCA-reduced data + cell graph
+3. Models train in parallel:
+   - EIF (full retrain)
+   - VAE/GNN/ContrastiveAE (incremental)
+4. decision_fusion.py → Confidence-weighted voting
+5. logger.py/metrics.py → Track everything

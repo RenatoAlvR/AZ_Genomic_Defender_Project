@@ -1,0 +1,100 @@
+# =========================
+#  CONFIG FILE FOR GENOMIC POISONING DETECTOR
+# =========================
+
+# === General Settings ===
+experiment_name: "breast_cancer_clean_v1"
+seed: 42
+log_to_file: true
+log_file_path: "logs/run_01.log"
+
+# === Data Settings ===
+data:
+  raw_path: "data/raw_dataset.csv"
+  graph_path: "data/graph_edges.csv"
+  output_dir: "outputs/"
+  use_graph: true
+  build_graph_from_expression: true  # If true, build k-NN graph from gene expression matrix
+
+# === Preprocessing Settings ===
+preprocessing:
+  normalize: true
+  scale: true
+  n_top_genes: 2000
+  pca_components: 50
+
+# === Model Selection ===
+models:
+  EIF:
+    enable: true
+    n_trees: 200
+    sample_size: 512
+    extension_level: 1
+    contamination: 0.05
+    random_state: 42
+  OCSVM:
+    enabled: true
+    kernel: "rbf"
+    gamma: "scale"
+    nu: 0.05
+  VAE:
+    enable: true
+    input_dim: 50          # Should match PCA dimensions from preprocessor
+    latent_dim: 10
+    hidden_dims: [32, 16]  # List of hidden layer sizes
+    conv_dims: null        # Optional list of conv layer channels
+    kernel_size: 3
+    learning_rate: 0.001
+    dropout: 0.2
+    batch_size: 64
+    epochs: 200
+    patience: 20
+    reconstruction_loss_weight: 1.0
+  GNN:
+    enable: true
+    input_dim: 50          # Should match PCA dimensions from preprocessor
+    hidden_dims: [64, 32]  # List of hidden layer sizes
+    latent_dim: 16         # Latent space dimension
+    dropout: 0.3           # Dropout rate
+    learning_rate: 0.001   # Learning rate
+    epochs: 200            # Max training epochs
+    patience: 20           # Early stopping patience
+  DDPM:
+    enabled: true
+    noise_steps: 1000
+    learning_rate: 0.0001
+  ContrastiveAE:
+    enable: true
+    input_dim: 50          # Should match PCA dimensions from preprocessor
+    hidden_dims: [128, 64] # List of hidden layer sizes
+    latent_dim: 32         # Latent space dimension
+    temperature: 0.1       # Contrastive loss temperature
+    alpha: 0.5             # Weight for contrastive loss
+    dropout: 0.2           # Dropout rate
+    learning_rate: 0.001   # Learning rate
+    batch_size: 64         # Batch size
+    epochs: 150            # Max training epochs
+    patience: 15           # Early stopping patience
+
+# === Detection Fusion Strategy ===
+fusion:
+  method: "weighted_vote"  # Options: majority_vote, weighted_vote, ensemble_nn
+  weights:
+    EIF: 1.0
+    OCSVM: 1.0
+    VAE: 1.5
+    GNN: 1.5
+    DDPM: 2.0
+    ContrastiveAE: 2.0
+  threshold: 0.6
+
+# === Incremental Training ===
+incremental_training:
+  enabled: true
+  update_interval: 1  # Number of new data batches before retraining
+  max_history: 10     # Keep last N batches for retraining
+
+# === Evaluation ===
+evaluation:
+  run_on_validation_set: true
+  report_metrics: ["precision", "recall", "AUC"]
