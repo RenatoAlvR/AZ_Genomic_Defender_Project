@@ -8,10 +8,10 @@ from ..utils.logger import logger
 from ..utils.metrics import AnomalyMetrics
 
 class ModelTrainer:
-    def __init__(self, config_path: str):
+    def __init__(self, config: dict = None):
+        self.config = config.get('incremental_training', {}) if config else {}
         self.models_dir = Path("training/trained_models")  # Fixed path
         self.models_dir.mkdir(parents=True, exist_ok=True)  # Auto-create
-        self.config = load_config(config_path)
         
     def train_incrementally(self, processed_data: Dict, force_retrain: bool = False):
         """Models will be saved to training/trained_models/"""

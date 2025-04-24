@@ -9,7 +9,8 @@ from typing import Dict, Any, Optional
 from genomic_defender_v1.preprocessing.preprocessor import GenomicDataPreprocessor
 from genomic_defender_v1.training.trainer import ModelTrainer
 from genomic_defender_v1.detection.detector import PoisonDetector
-from genomic_defender_v1.utils.logger import logger
+from genomic_defender_v1.utils.logger import GenomeGuardianLogger
+from genomic_defender_v1.utils.logger import _setup_logger
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
@@ -75,11 +76,11 @@ def main():
     
     # Initialize logger WITH the loaded config
     logger = GenomeGuardianLogger(config=config.get('logging', {}))
-    setup_logging(args.log_level)
+    _setup_logger(args.log_level)
     
     # Preprocess data
     logging.info("Starting data preprocessing...")
-    preprocessor = GenomicDataPreprocessor(config_path=args.config_path)
+    preprocessor = GenomicDataPreprocessor(config=config)
     processed_data = preprocessor.preprocess_pipeline(
         matrix_path=args.matrix_path,
         features_path=args.features_path,
@@ -90,7 +91,7 @@ def main():
     if args.train:
         # Training mode
         logging.info("Initializing model trainer...")
-        trainer = ModelTrainer(config_path=args.config_path)
+        trainer = ModelTrainer(config=config)
         trainer.train_incrementally(
             processed_data=processed_data,
             force_retrain=args.force_retrain

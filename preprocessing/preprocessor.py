@@ -27,15 +27,14 @@ class GenomicDataPreprocessor:
     - Cell similarity graph construction for GNN
     """
     
-    def __init__(self, config_path: str = 'config.yaml'):
+    def __init__(self, config: dict = None):
         """
         Initialize preprocessor with configuration.
         
         Args:
-            config_path: Path to YAML configuration file
+            config: Loaded configuration dictionary (None will use defaults)
         """
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f).get('preprocessing', {})
+        self.config = config.get('preprocessing', {}) if config else {}
         
         # Set defaults if not in config
         self.min_genes_per_cell = self.config.get('min_genes_per_cell', 200)
@@ -45,6 +44,15 @@ class GenomicDataPreprocessor:
         self.normalize = self.config.get('normalize', 'log1p')
         self.scale = self.config.get('scale', True)
         self.random_state = self.config.get('random_state', 42)
+        
+        # Validate critical parameters
+        self._validate_config()
+    
+    def _validate_config(self):
+        """Validate configuration parameters"""
+        if not isinstance(self.n_pca_components, int) or self.n_pca_components <= 0:
+            raise ValueError("n_pca_components must be a positive integer")
+        # Add other validations as needed
         
     def load_data(self, matrix_path: str, features_path: str, barcodes_path: str) -> Tuple[csr_matrix, pd.DataFrame, pd.DataFrame]:
         """

@@ -18,25 +18,23 @@ data:
 
 # === Preprocessing Settings ===
 preprocessing:
-  normalize: true
+  min_genes_per_cell: 200
+  min_cells_per_gene: 3
+  n_pca_components: 50
+  n_neighbors: 15
+  normalize: log1p
   scale: true
-  n_top_genes: 2000
-  pca_components: 50
+  random_state: 42
 
 # === Model Selection ===
 models:
-  EIF:
+  EIF:  #Parameters for the extended isolation forest
     enable: true
-    n_trees: 200
-    sample_size: 512
-    extension_level: 1
-    contamination: 0.05
-    random_state: 42
-  OCSVM:
-    enabled: true
-    kernel: "rbf"
-    gamma: "scale"
-    nu: 0.05
+    n_trees: 200            #More trees improve stability, but increase time
+    sample_size: 512         #Controls how many samples each tree sees
+    extension_level: 15       #For PCA reduced matrices, try and stay in the 5 - 50 interval, the higher the value, the higher is the computational cost
+    contamination: 0.05      #Adjust based on your expected anomaly ratio (expected poisoned data in this case)
+    random_state: 42         #Ensure reproducibility (don´t make it none)
   VAE:
     enable: true
     input_dim: 50          # Should match PCA dimensions from preprocessor
@@ -64,13 +62,18 @@ models:
     noise_steps: 1000
     learning_rate: 0.0001
   ContrastiveAE:
-    enable: true
-    input_dim: 50          # Should match PCA dimensions from preprocessor
+    enable: True
+    SynCell: True
+    GenScal: False
+    Batch: False
+    input_dim: 20000       # Should match PCA dimensions from preprocessor
     hidden_dims: [128, 64] # List of hidden layer sizes
-    latent_dim: 32         # Latent space dimension
-    temperature: 0.1       # Contrastive loss temperature
-    alpha: 0.5             # Weight for contrastive loss
+    shared_dims: [1024, 512, 256]
+    latent_dim: 128        # Latent space dimension
+    temperature: 0.5       # Contrastive loss temperature
     dropout: 0.2           # Dropout rate
+    alpha: 0.7             # Weight for contrastive loss
+    beta: 0.3
     learning_rate: 0.001   # Learning rate
     batch_size: 64         # Batch size
     epochs: 150            # Max training epochs
@@ -81,7 +84,6 @@ fusion:
   method: "weighted_vote"  # Options: majority_vote, weighted_vote, ensemble_nn
   weights:
     EIF: 1.0
-    OCSVM: 1.0
     VAE: 1.5
     GNN: 1.5
     DDPM: 2.0
@@ -94,7 +96,50 @@ incremental_training:
   update_interval: 1  # Number of new data batches before retraining
   max_history: 10     # Keep last N batches for retraining
 
+# Genome Guardian Configuration
+detection:
+  # Model loading and validation
+  models_dir: "training/trained_models"  # Path relative to project root
+  required_models:  # Must match these filenames
+    - "eif.pt"
+    - "vae.pt"
+    - "gnn.pt"
+    - "contrastive_ae.pt"
+    - "ddpm.pt"
+  
+  # Model-specific detection thresholds
+  thresholds:
+    eif: 0.95  # Contamination parameter
+    vae: 0.01  # Reconstruction error percentile
+    gnn: 0.85  # Graph anomaly threshold
+    contrastive_ae: 0.90  # Similarity threshold
+    ddpm: 0.80  # Denoising confidence
+  
+  # Decision fusion configuration
+  fusion:
+    method: "weighted_average"  # Options: [weighted_average, voting, stacking]
+    weights:
+      eif: 0.15
+      vae: 0.20
+      gnn: 0.25
+      contrastive_ae: 0.15
+      ddpm: 0.15
+    consensus_threshold: 0.7  # Minimum agreement for voting method
+  
+  # Hardware settings
+  hardware:
+    device: "auto"  # Options: [auto, cpu, cuda]
+    batch_size: 64  # For batch processing
+    num_workers: 4  # For data loading
+
+  # Logging and output
+  logging:
+    level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+    save_scores: true
+    output_dir: "results/detection_outputs"
+
 # === Evaluation ===
 evaluation:
   run_on_validation_set: true
   report_metrics: ["precision", "recall", "AUC"]
+

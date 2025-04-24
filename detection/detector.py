@@ -27,17 +27,21 @@ class PoisonDetector:
     - Preprocessed input data (from GenomicDataPreprocessor)
     """
     
-    def __init__(self, config_path: str = 'config.yaml'):
+    def __init__(self, config: dict = None):
         """
         Initialize detector with configuration.
         
         Args:
             config_path: Path to YAML config file
         """
+        self.config = config.get('detection', {}) if config else {}
         self.models_dir = Path("training/trained_models")
         self._validate_model_dir()
-        self.config = self._load_config(config_path)
-        self.fusion = DecisionFusion(config_path=config_path)
+        self.fusion = DecisionFusion(config=self.config)
+        device_config = self.config.get('hardware', {}).get('device', 'auto')
+        self.device = torch.device(
+            'cuda' if torch.cuda.is_available() and device_config in ['auto', 'cuda'] else 'cpu'
+        )
         
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load configuration from YAML file."""
@@ -45,17 +49,17 @@ class PoisonDetector:
             return yaml.safe_load(f)
         
     def _validate_model_dir(self) -> None:
+        required_models = self.config.get('required_models', [
+        'eif.pt', 'vae.pt', 'gnn.pt', 'contrastive_ae.pt', 'ddpm.pt'
+        ])
+
         """Verify model directory exists with required models."""
         if not self.models_dir.exists():
             raise FileNotFoundError(
                 f"Model directory {self.models_dir} not found. "
                 "Please train models first using --train mode."
             )
-        
-        required_models = [
-            'eif.pt', 'vae.pt', 'gnn.pt', 
-            'contrastive_ae.pt', 'ocsvm.pt', 'ddpm.pt'
-        ]
+    
         missing = [m for m in required_models if not (self.models_dir / m).exists()]
         if missing:
             raise FileNotFoundError(
@@ -72,7 +76,6 @@ class PoisonDetector:
             'vae': VariationalAutoencoder,
             'gnn': GNNAutoencoder,
             'contrastive_ae': ContrastiveAutoencoder,
-            'ocsvm': OneClassSVM,
             'ddpm': DDPMDetector
         }
         
@@ -98,7 +101,7 @@ class PoisonDetector:
         """
         scores = {}
         
-        for model_name in ['eif', 'vae', 'gnn', 'contrastive_ae', 'ocsvm', 'ddpm']:
+        for model_name in ['eif', 'vae', 'gnn', 'contrastive_ae', 'ddpm']:
             logger.info(f"Running {model_name} detection...")
             model = self._load_model(model_name)
             
