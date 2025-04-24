@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 from typing import Dict, Any
 
+# As of now, the CAE is used to detect Synthetic Cell Injections, Gene Scaling and Batch Mimicry
 class HybridContrastiveAE(nn.Module):
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__()  #Always call super() first
@@ -36,6 +37,8 @@ class HybridContrastiveAE(nn.Module):
         self.alpha = self.config['alpha']
         self.beta = self.config['beta']
         
+        self._validate_config()     # Validate the parameters of the model
+
         # Model components
         self.encoder = self._build_encoder(
             self.input_dim, 
@@ -66,7 +69,6 @@ class HybridContrastiveAE(nn.Module):
         )
         
         self.to(self.device)  # Use the instance's device attribute
-        self._validate_config()
 
     def _validate_config(self):     #Validate all configuration parameters
         
@@ -220,6 +222,19 @@ class HybridContrastiveAE(nn.Module):
         return scores.cpu().numpy()
 
     def save(self, path: str):
+        '''
+        Example of use:
+        Save to current directory:
+            model.save('synthetic_detector.pt')  
+
+        Save to absolute path:
+            model.save('/home/user/models/scRNA_model.pt')
+
+        Save to relative path (creates 'saved_models' dir first):
+            from pathlib import Path
+            Path("saved_models").mkdir(exist_ok=True)
+            model.save('saved_models/latest.pt')
+        '''
         torch.save({
             'state_dict': self.state_dict(),
             'config': self.config,

@@ -50,22 +50,35 @@ models:
     reconstruction_loss_weight: 1.0
   GNN:
     enable: true
-    input_dim: 50          # Should match PCA dimensions from preprocessor
-    hidden_dims: [64, 32]  # List of hidden layer sizes
-    latent_dim: 16         # Latent space dimension
-    dropout: 0.3           # Dropout rate
-    learning_rate: 0.001   # Learning rate
-    epochs: 200            # Max training epochs
-    patience: 20           # Early stopping patience
+    SynCell: false
+    LabelFlip: false
+    InjNoise: false
+    input_dim: 20000            # Should match PCA dimensions from preprocessor
+    hidden_dims: [64, 32]       # List of hidden layer sizes
+    latent_dim: 16              # Latent space dimension
+    dropout: 0.3                # Dropout rate
+    num_conv_layers: 3          # Number of GNN layers
+    conv_type: 'GCN'            # Options: GCN, GAT, GraphSAGE
+    heads: 4                    # For GAT
+    edge_dropout: 0.2  
+    training:
+      learning_rate: 0.001        # Learning rate
+      epochs: 200                 # Max training epochs
+      patience: 20               # Early stopping patience
+    loss_weights:
+      recon: 0.4
+      synth: 0.3
+      flip: 0.2
+      noise: 0.1
   DDPM:
     enabled: true
     noise_steps: 1000
     learning_rate: 0.0001
   ContrastiveAE:
-    enable: True
-    SynCell: True
-    GenScal: False
-    Batch: False
+    enable: true
+    SynCell: true
+    GenScal: false
+    Batch: false
     input_dim: 20000       # Should match PCA dimensions from preprocessor
     hidden_dims: [128, 64] # List of hidden layer sizes
     shared_dims: [1024, 512, 256]

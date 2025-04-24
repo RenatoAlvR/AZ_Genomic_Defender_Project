@@ -36,3 +36,17 @@ class ModelTrainer:
         else:
             logger.info(f"Initializing new {model_name} model")
             return model_class(**self.config['models'][model_name])
+        
+'''For GNN:
+        self.scaler = StandardScaler()
+        # Setup optimizer and loss
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        self.criterion = nn.MSELoss()
+
+        # Outside the class (in your training script)
+        model = GNNAutoencoder(config)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+        # Then passed into fit()
+        model.fit(graph_data, optimizer, epochs=100)
+'''
