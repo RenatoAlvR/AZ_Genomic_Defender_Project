@@ -1,2 +1,2 @@
-# Azdapod-Project
-Repository for the AI-powered genomics data-sets poisoning detector Azdapod
+# AZ-Genomic-Defender-Project
+Repository for the AI-powered genomics data-sets poisoning detector AZGenomicDefender
