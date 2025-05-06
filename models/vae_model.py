@@ -1,330 +1,447 @@
+# vae_model.py
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import numpy as np
-from typing import Tuple, Dict, Optional
-import yaml
-import logging
+import torch.nn.functional as F
+from typing import Dict, Any, Tuple, Optional
 from pathlib import Path
-from sklearn.preprocessing import StandardScaler
+import numpy as np
+
+# Task-specific Head Implementations for VAE
+class LabelFlipHeadVAE(nn.Module):
+    """Detects potential label flips based on VAE latent space."""
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__()
+        latent_dim = config['latent_dim']
+        # Simple MLP head
+        self.detector = nn.Sequential(
+            nn.Linear(latent_dim, max(32, latent_dim // 2)),
+            nn.LeakyReLU(0.2),
+            nn.Dropout(config.get('head_dropout', 0.2)), # Add dropout if desired
+            nn.Linear(max(32, latent_dim // 2), 1)  # Output a single score/logit
+        )
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        # Output raw logits; BCEWithLogitsLoss is numerically stable
+        return self.detector(z)
+
+class GeneScaleHeadVAE(nn.Module):
+    """Detects potential gene scaling based on VAE latent space."""
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__()
+        latent_dim = config['latent_dim']
+        # Another simple MLP head
+        self.detector = nn.Sequential(
+            nn.Linear(latent_dim, max(64, latent_dim // 2)),
+            nn.ReLU(),
+            nn.Dropout(config.get('head_dropout', 0.2)),
+            nn.Linear(max(64, latent_dim // 2), 1) # Output a single score/logit
+        )
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        # Output raw logits
+        return self.detector(z)
 
 class VariationalAutoencoder(nn.Module):
     """
-    Variational Autoencoder for genomic anomaly detection.
-    Configurable architecture with support for both linear and convolutional layers.
+    Variational Autoencoder (VAE) for genomic data anomaly detection.
+    Configurable detection heads for:
+    - Label Flips
+    - Gene Scalation
+
+    Assumes input data `x` is a tensor of shape [num_samples, input_dim].
+    During training (`fit`), expects data object with `x`, `flip_labels`, `scale_labels`.
     """
-    
-    def __init__(self,
-                 input_dim: int = 50,
-                 latent_dim: int = 10,
-                 hidden_dims: Optional[list] = None,
-                 conv_dims: Optional[list] = None,
-                 kernel_size: int = 3,
-                 learning_rate: float = 1e-3,
-                 dropout: float = 0.2,
-                 batch_size: int = 32,
-                 epochs: int = 100,
-                 patience: int = 10,
-                 reconstruction_loss_weight: float = 1.0,
-                 device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
-                 **kwargs):
+    def __init__(self, config: Dict[str, Any] = None):
         super().__init__()
-        
-        # Initialize parameters
-        self.input_dim = input_dim
-        self.latent_dim = latent_dim
-        self.hidden_dims = hidden_dims or [32, 16]
-        self.conv_dims = conv_dims
-        self.kernel_size = kernel_size
-        self.learning_rate = learning_rate
-        self.dropout = dropout
-        self.batch_size = batch_size
-        self.epochs = epochs
-        self.patience = patience
-        self.reconstruction_loss_weight = reconstruction_loss_weight
-        self.device = device
-        self.scaler = StandardScaler()
-        
-        # Handle additional configuration
-        self._configure_from_kwargs(kwargs)
-        
-        # Build encoder and decoder
+
+        # Default configuration
+        default_config = {
+            # Detection objectives
+            'LabelFlip': False,
+            'GeneScalation': False,
+
+            # Architecture
+            'input_dim': 20000,      # Matches GNN-AE for consistency
+            'hidden_dims': [512, 256], # Example MLP hidden layers
+            'latent_dim': 64,
+            'dropout': 0.2,
+            'head_dropout': 0.2,     # Dropout specific to task heads
+            'device': 'cuda' if torch.cuda.is_available() else 'cpu',
+        }
+
+        self.config = {**default_config, **(config or {})}
+
+        # Default loss weights - KL weight often tuned carefully
+        default_loss_weights = {
+            'recon': 0.6,
+            'kl': 0.1,
+            'flip': 0.2,
+            'scale': 0.1
+        }
+        # Merge with user config loss weights
+        self.loss_weights = {**default_loss_weights, **(self.config.get('loss_weights', {}))}
+
+        self._validate_config()
+
+        # Encoder layers (outputs mu and log_var)
         self.encoder = self._build_encoder()
+        self.fc_mu = nn.Linear(self.config['hidden_dims'][-1], self.config['latent_dim'])
+        self.fc_log_var = nn.Linear(self.config['hidden_dims'][-1], self.config['latent_dim'])
+
+        # Decoder layers
         self.decoder = self._build_decoder()
-        
-        # Move to device
-        self.to(self.device)
-        
-        # Setup optimizer
-        self.optimizer = optim.Adam(self.parameters(), lr=self.learning_rate)
-        
-        # Early stopping
-        self.best_loss = np.inf
-        self.epochs_without_improvement = 0
-        
-    def _configure_from_kwargs(self, kwargs: Dict[str, Any]) -> None:
-        """Handle additional configuration parameters."""
-        if 'config_path' in kwargs:
-            with open(kwargs['config_path'], 'r') as f:
-                config = yaml.safe_load(f).get('models', {}).get('vae', {})
-            self.input_dim = config.get('input_dim', self.input_dim)
-            self.latent_dim = config.get('latent_dim', self.latent_dim)
-            self.hidden_dims = config.get('hidden_dims', self.hidden_dims)
-            self.conv_dims = config.get('conv_dims', self.conv_dims)
-            self.kernel_size = config.get('kernel_size', self.kernel_size)
-            self.learning_rate = config.get('learning_rate', self.learning_rate)
-            self.dropout = config.get('dropout', self.dropout)
-            self.batch_size = config.get('batch_size', self.batch_size)
-            self.epochs = config.get('epochs', self.epochs)
-            self.patience = config.get('patience', self.patience)
-            self.reconstruction_loss_weight = config.get('reconstruction_loss_weight', 
-                                                     self.reconstruction_loss_weight)
-            
-    def _build_encoder(self) -> nn.Module:
-        """Construct the encoder network."""
+
+        # Task-specific heads
+        self.task_heads = nn.ModuleDict()
+        if self.config['LabelFlip']:
+            self.task_heads['flip'] = LabelFlipHeadVAE(self.config)
+        if self.config['GeneScalation']:
+            self.task_heads['scale'] = GeneScaleHeadVAE(self.config)
+
+        self.to(self.config['device'])
+
+    def _validate_config(self):
+        assert isinstance(self.config['LabelFlip'], bool), "LabelFlip must be a boolean"
+        assert isinstance(self.config['GeneScalation'], bool), "GeneScalation must be a boolean"
+        assert isinstance(self.config['input_dim'], int) and self.config['input_dim'] > 0
+        assert isinstance(self.config['hidden_dims'], list) and len(self.config['hidden_dims']) > 0
+        assert all(isinstance(d, int) and d > 0 for d in self.config['hidden_dims'])
+        assert isinstance(self.config['latent_dim'], int) and self.config['latent_dim'] > 0
+        assert 0 <= self.config['dropout'] < 1
+        assert 0 <= self.config['head_dropout'] < 1
+
+        if any([self.config['LabelFlip'], self.config['GeneScalation']]):
+            self._validate_loss_weights()
+        else:
+             # If no task heads, ensure recon and KL weights sum to ~1
+             assert 'loss_weights' in self.config, "loss_weights must be defined"
+             assert 'recon' in self.config['loss_weights']
+             assert 'kl' in self.config['loss_weights']
+             required_weights = ['recon', 'kl']
+             active_weights = {k: v for k, v in self.config['loss_weights'].items() if k in required_weights}
+             weight_sum = sum(active_weights.values())
+             assert abs(weight_sum - 1.0) < 1e-5, \
+                 f"Recon and KL loss weights sum to {weight_sum:.4f}, should sum to 1.0 when no task heads are active."
+
+
+    def _validate_loss_weights(self):
+        assert 'loss_weights' in self.config, "loss_weights must be defined"
+        required_weights = ['recon', 'kl']
+        if self.config['LabelFlip']:
+            required_weights.append('flip')
+        if self.config['GeneScalation']:
+            required_weights.append('scale')
+
+        missing = [w for w in required_weights if w not in self.loss_weights]
+        assert not missing, f"Missing loss weights for: {missing}"
+
+        for name, value in self.loss_weights.items():
+            assert isinstance(value, (int, float)), f"{name} weight must be numeric"
+            assert 0 <= value <= 1, f"{name} weight must be between 0 and 1"
+
+        active_weights = {k: v for k, v in self.loss_weights.items() if k in required_weights}
+        weight_sum = sum(active_weights.values())
+        assert abs(weight_sum - 1.0) < 1e-5, \
+            f"Active loss weights sum to {weight_sum:.4f}, should sum to 1.0. Active weights: {active_weights}"
+
+    def _build_encoder(self) -> nn.Sequential:
         layers = []
-        prev_dim = self.input_dim
-        
-        # Add convolutional layers if specified
-        if self.conv_dims:
-            for i, dim in enumerate(self.conv_dims):
-                layers.extend([
-                    nn.Conv1d(1 if i == 0 else self.conv_dims[i-1], 
-                             dim, 
-                             kernel_size=self.kernel_size,
-                             padding=self.kernel_size//2),
-                    nn.BatchNorm1d(dim),
-                    nn.LeakyReLU(0.2),
-                    nn.MaxPool1d(2),
-                    nn.Dropout(self.dropout)
-                ])
-            prev_dim = (prev_dim // (2 ** len(self.conv_dims))) * self.conv_dims[-1]
-        
-        # Add linear layers
-        for dim in self.hidden_dims:
-            layers.extend([
-                nn.Linear(prev_dim, dim),
-                nn.BatchNorm1d(dim),
-                nn.LeakyReLU(0.2),
-                nn.Dropout(self.dropout)
-            ])
-            prev_dim = dim
-        
-        # Final layers for mean and log variance
-        self.fc_mu = nn.Linear(prev_dim, self.latent_dim)
-        self.fc_var = nn.Linear(prev_dim, self.latent_dim)
-        
+        in_dim = self.config['input_dim']
+        for hidden_dim in self.config['hidden_dims']:
+            layers.append(nn.Linear(in_dim, hidden_dim))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(self.config['dropout']))
+            in_dim = hidden_dim
         return nn.Sequential(*layers)
-    
-    def _build_decoder(self) -> nn.Module:
-        """Construct the decoder network."""
+
+    def _build_decoder(self) -> nn.Sequential:
         layers = []
-        prev_dim = self.latent_dim
-        
-        # Reverse hidden dims for decoder
-        reversed_hidden_dims = list(reversed(self.hidden_dims))
-        
-        for dim in reversed_hidden_dims[1:]:
-            layers.extend([
-                nn.Linear(prev_dim, dim),
-                nn.BatchNorm1d(dim),
-                nn.LeakyReLU(0.2),
-                nn.Dropout(self.dropout)
-            ])
-            prev_dim = dim
-        
-        # Final reconstruction layer
-        layers.append(nn.Linear(prev_dim, self.input_dim))
-        
+        # Reversed hidden dims + latent dim
+        decoder_dims = [self.config['latent_dim']] + self.config['hidden_dims'][::-1]
+        for i in range(len(decoder_dims) - 1):
+            layers.append(nn.Linear(decoder_dims[i], decoder_dims[i+1]))
+            layers.append(nn.ReLU())
+            # Optional: Add dropout to decoder too
+            # layers.append(nn.Dropout(self.config['dropout']))
+
+        layers.append(nn.Linear(decoder_dims[-1], self.config['input_dim']))
+        # Sigmoid activation if input data is normalized to [0, 1]
+        # layers.append(nn.Sigmoid()) # Or leave as linear output
         return nn.Sequential(*layers)
-    
-    def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Encode input into latent distribution parameters."""
-        h = self.encoder(x)
-        return self.fc_mu(h), self.fc_var(h)
-    
-    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-        """Reparameterization trick for sampling."""
-        std = torch.exp(0.5 * logvar)
+
+    def reparameterize(self, mu: torch.Tensor, log_var: torch.Tensor) -> torch.Tensor:
+        """Reparameterization trick: z = mu + std * epsilon"""
+        if not self.training:
+            return mu # Use mean during evaluation/inference for stability
+        std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)
         return mu + eps * std
-    
+
+    def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Encodes input x into mu and log_var."""
+        h = self.encoder(x)
+        mu = self.fc_mu(h)
+        log_var = self.fc_log_var(h)
+        return mu, log_var
+
     def decode(self, z: torch.Tensor) -> torch.Tensor:
-        """Decode latent samples."""
+        """Decodes latent vector z into reconstruction."""
         return self.decoder(z)
-    
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Full forward pass through the VAE."""
-        mu, logvar = self.encode(x)
-        z = self.reparameterize(mu, logvar)
-        return self.decode(z), mu, logvar
-    
-    def loss_function(self, 
-                     recon_x: torch.Tensor, 
-                     x: torch.Tensor, 
-                     mu: torch.Tensor, 
-                     logvar: torch.Tensor) -> torch.Tensor:
-        """Compute VAE loss (reconstruction + KL divergence)."""
-        # Reconstruction loss (MSE)
-        recon_loss = nn.functional.mse_loss(recon_x, x, reduction='sum')
-        
-        # KL divergence
-        kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        
-        return self.reconstruction_loss_weight * recon_loss + kl_loss
-    
-    def fit(self, X: np.ndarray) -> None:
-        """Train the VAE on the input data."""
-        # Scale and convert to tensor
-        X = self.scaler.fit_transform(X)
-        X_tensor = torch.FloatTensor(X).to(self.device)
-        
-        # Create data loader
-        dataset = torch.utils.data.TensorDataset(X_tensor)
-        dataloader = torch.utils.data.DataLoader(dataset, 
-                                              batch_size=self.batch_size, 
-                                              shuffle=True)
-        
-        logging.info(f"Training VAE with input_dim={self.input_dim}, latent_dim={self.latent_dim}, "
-                   f"hidden_dims={self.hidden_dims}, conv_dims={self.conv_dims}")
-        
-        # Training loop
-        for epoch in range(self.epochs):
+
+    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        mu, log_var = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        recon_x = self.decode(z)
+
+        outputs = {
+            'recon': recon_x,
+            'mu': mu,
+            'log_var': log_var,
+            'latent_z': z
+        }
+
+        # Pass latent sample z to task heads
+        for task_name, head in self.task_heads.items():
+            outputs[task_name] = head(z)
+
+        return outputs
+
+    def _vae_loss(self, recon_x: torch.Tensor, x: torch.Tensor, mu: torch.Tensor, log_var: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Calculates VAE reconstruction and KL divergence loss."""
+        # Reconstruction Loss (Mean Squared Error)
+        recon_loss = F.mse_loss(recon_x, x, reduction='sum') # Use sum for consistency with KL term scale
+
+        # KL Divergence Loss (compared to standard normal N(0,I))
+        # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
+        kl_loss = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
+
+        # Return per-sample average losses for easier weighting/interpretation
+        batch_size = x.size(0)
+        return recon_loss / batch_size, kl_loss / batch_size
+
+
+    def fit(self, data_loader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer, epochs: int, patience: int = 20, validation_loader: Optional[torch.utils.data.DataLoader] = None):
+        """Trains the VAE model."""
+
+        best_val_loss = float('inf')
+        epochs_no_improve = 0
+
+        for epoch in range(epochs):
             self.train()
-            train_loss = 0
-            
-            for batch in dataloader:
-                x = batch[0]
-                self.optimizer.zero_grad()
-                
-                # Forward pass
-                recon_x, mu, logvar = self(x)
-                
-                # Compute loss
-                loss = self.loss_function(recon_x, x, mu, logvar)
-                
-                # Backward pass
-                loss.backward()
-                train_loss += loss.item()
-                self.optimizer.step()
-            
-            # Average loss for the epoch
-            avg_loss = train_loss / len(dataloader.dataset)
-            
-            # Early stopping check
-            if avg_loss < self.best_loss:
-                self.best_loss = avg_loss
-                self.epochs_without_improvement = 0
+            train_loss_accum = 0.0
+            recon_loss_accum = 0.0
+            kl_loss_accum = 0.0
+            flip_loss_accum = 0.0
+            scale_loss_accum = 0.0
+            num_batches = 0
+
+            for batch_data in data_loader:
+                # Assuming batch_data contains 'x' and potentially labels
+                # Adjust access based on your DataLoader structure
+                if isinstance(batch_data, torch.Tensor):
+                    x = batch_data
+                    # Handle case where labels might not be in every batch/loader
+                    flip_labels = None
+                    scale_labels = None
+                elif isinstance(batch_data, dict):
+                    x = batch_data['x']
+                    flip_labels = batch_data.get('flip_labels')
+                    scale_labels = batch_data.get('scale_labels')
+                elif hasattr(batch_data, 'x'): # For PyG Data objects if used
+                     x = batch_data.x
+                     flip_labels = getattr(batch_data, 'flip_labels', None)
+                     scale_labels = getattr(batch_data, 'scale_labels', None)
+                else:
+                    raise ValueError("Unsupported data batch type in VAE fit")
+
+                x = x.to(self.config['device'])
+                if flip_labels is not None: flip_labels = flip_labels.to(self.config['device']).float().unsqueeze(-1)
+                if scale_labels is not None: scale_labels = scale_labels.to(self.config['device']).float().unsqueeze(-1)
+
+                optimizer.zero_grad()
+                outputs = self(x)
+
+                # VAE Core Losses
+                recon_loss, kl_loss = self._vae_loss(outputs['recon'], x, outputs['mu'], outputs['log_var'])
+
+                # Supervised Losses (using BCEWithLogitsLoss for stability)
+                flip_loss = 0
+                if 'flip' in outputs and flip_labels is not None:
+                    flip_loss = F.binary_cross_entropy_with_logits(outputs['flip'], flip_labels)
+
+                scale_loss = 0
+                if 'scale' in outputs and scale_labels is not None:
+                     scale_loss = F.binary_cross_entropy_with_logits(outputs['scale'], scale_labels)
+
+                # Combine losses using weights
+                total_loss = (
+                    self.loss_weights['recon'] * recon_loss +
+                    self.loss_weights['kl'] * kl_loss +
+                    self.loss_weights.get('flip', 0) * flip_loss + # Use .get with default 0
+                    self.loss_weights.get('scale', 0) * scale_loss
+                )
+
+                total_loss.backward()
+                optimizer.step()
+
+                train_loss_accum += total_loss.item()
+                recon_loss_accum += recon_loss.item()
+                kl_loss_accum += kl_loss.item()
+                flip_loss_accum += flip_loss.item() if isinstance(flip_loss, torch.Tensor) else flip_loss
+                scale_loss_accum += scale_loss.item() if isinstance(scale_loss, torch.Tensor) else scale_loss
+                num_batches += 1
+
+            avg_train_loss = train_loss_accum / num_batches
+            print(f"Epoch {epoch}: Avg Train Loss: {avg_train_loss:.4f} "
+                  f"(Recon: {recon_loss_accum / num_batches:.4f}, KL: {kl_loss_accum / num_batches:.4f}, "
+                  f"Flip: {flip_loss_accum / num_batches:.4f}, Scale: {scale_loss_accum / num_batches:.4f})")
+
+            # Validation and Early Stopping
+            if validation_loader:
+                self.eval()
+                val_loss_accum = 0.0
+                val_batches = 0
+                with torch.no_grad():
+                    for batch_data in validation_loader:
+                       # Similar data handling as in training loop
+                        if isinstance(batch_data, torch.Tensor): x_val = batch_data
+                        elif isinstance(batch_data, dict): x_val = batch_data['x']
+                        elif hasattr(batch_data, 'x'): x_val = batch_data.x
+                        else: continue # Skip unsupported type
+
+                        x_val = x_val.to(self.config['device'])
+                        # Get labels if they exist for validation loss calculation
+                        flip_labels_val = batch_data.get('flip_labels') if isinstance(batch_data, dict) else getattr(batch_data, 'flip_labels', None)
+                        scale_labels_val = batch_data.get('scale_labels') if isinstance(batch_data, dict) else getattr(batch_data, 'scale_labels', None)
+                        if flip_labels_val is not None: flip_labels_val = flip_labels_val.to(self.config['device']).float().unsqueeze(-1)
+                        if scale_labels_val is not None: scale_labels_val = scale_labels_val.to(self.config['device']).float().unsqueeze(-1)
+
+                        outputs_val = self(x_val)
+                        recon_loss_val, kl_loss_val = self._vae_loss(outputs_val['recon'], x_val, outputs_val['mu'], outputs_val['log_var'])
+
+                        flip_loss_val = 0
+                        if 'flip' in outputs_val and flip_labels_val is not None:
+                            flip_loss_val = F.binary_cross_entropy_with_logits(outputs_val['flip'], flip_labels_val)
+
+                        scale_loss_val = 0
+                        if 'scale' in outputs_val and scale_labels_val is not None:
+                            scale_loss_val = F.binary_cross_entropy_with_logits(outputs_val['scale'], scale_labels_val)
+
+                        total_val_loss = (
+                            self.loss_weights['recon'] * recon_loss_val +
+                            self.loss_weights['kl'] * kl_loss_val +
+                            self.loss_weights.get('flip', 0) * flip_loss_val +
+                            self.loss_weights.get('scale', 0) * scale_loss_val
+                        )
+                        val_loss_accum += total_val_loss.item()
+                        val_batches += 1
+
+                avg_val_loss = val_loss_accum / val_batches
+                print(f"Epoch {epoch}: Avg Validation Loss: {avg_val_loss:.4f}")
+
+                if avg_val_loss < best_val_loss:
+                    best_val_loss = avg_val_loss
+                    epochs_no_improve = 0
+                    # Optionally save best model checkpoint here
+                    # self.save(f"best_vae_model_epoch_{epoch}.pth")
+                else:
+                    epochs_no_improve += 1
+                    if epochs_no_improve >= patience:
+                        print(f"Early stopping triggered after {epoch + 1} epochs.")
+                        break
             else:
-                self.epochs_without_improvement += 1
-                if self.epochs_without_improvement >= self.patience:
-                    logging.info(f"Early stopping at epoch {epoch + 1}")
-                    break
-            
-            if (epoch + 1) % 10 == 0:
-                logging.info(f"Epoch {epoch + 1}/{self.epochs}, Loss: {avg_loss:.4f}")
-    
-    def detect(self, X: np.ndarray) -> np.ndarray:
+                # Basic early stopping based on training loss if no validation set
+                 if avg_train_loss < best_val_loss: # Use train loss as proxy
+                     best_val_loss = avg_train_loss
+                     epochs_no_improve = 0
+                 else:
+                     epochs_no_improve += 1
+                     if epochs_no_improve >= patience:
+                         print(f"Early stopping triggered after {epoch + 1} epochs based on training loss.")
+                         break
+
+
+    def detect(self, x: torch.Tensor) -> Dict[str, np.ndarray]:
         """
-        Compute anomaly scores for input data.
-        
+        Compute anomaly scores for input data x.
+
         Args:
-            X: Input data (n_samples, n_features)
-            
+            x: Input tensor of shape [num_samples, input_dim]
+
         Returns:
-            Anomaly scores (n_samples,)
+            Dictionary of numpy arrays with detection scores per sample.
+            Includes 'recon_error', 'kl_divergence', and task-specific scores ('flip', 'scale').
         """
-        if not hasattr(self, 'scaler'):
-            self.scaler = StandardScaler().fit(X)
-        
-        # Scale and convert to tensor
-        X_scaled = self.scaler.transform(X)
-        X_tensor = torch.FloatTensor(X_scaled).to(self.device)
-        
-        # Set to evaluation mode
         self.eval()
-        
+        x = x.to(self.config['device'])
+
         with torch.no_grad():
-            # Get reconstruction and latent space
-            recon_x, mu, logvar = self(X_tensor)
-            
-            # Calculate reconstruction error
-            recon_error = torch.sum((recon_x - X_tensor) ** 2, dim=1)
-            
-            # Calculate KL divergence term
-            kl_div = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
-            
-            # Combine into anomaly score
-            scores = recon_error.cpu().numpy() + kl_div.cpu().numpy()
-            
-            # Normalize scores to [0, 1] range
-            scores = (scores - scores.min()) / (scores.max() - scores.min() + 1e-10)
-            
-        logging.info(f"VAE detection completed. Score range: {scores.min():.3f}-{scores.max():.3f}")
-        
+            outputs = self(x)
+
+            # Anomaly score based on reconstruction error per sample
+            recon_error = torch.sum((outputs['recon'] - x) ** 2, dim=1).cpu().numpy()
+
+            # Anomaly score based on KL divergence per sample
+            # KL = -0.5 * sum(1 + log_var - mu^2 - exp(log_var), dim=1)
+            kl_div_per_sample = -0.5 * torch.sum(1 + outputs['log_var'] - outputs['mu'].pow(2) - outputs['log_var'].exp(), dim=1)
+            kl_div_score = kl_div_per_sample.cpu().numpy()
+
+            scores = {
+                'recon_error': recon_error,
+                'kl_divergence': kl_div_score
+            }
+
+            # Get task-specific scores (apply sigmoid since heads output logits)
+            if 'flip' in outputs:
+                scores['flip'] = torch.sigmoid(outputs['flip']).squeeze().cpu().numpy()
+            if 'scale' in outputs:
+                 scores['scale'] = torch.sigmoid(outputs['scale']).squeeze().cpu().numpy()
+
+            # Example combined score (can be refined in fusion logic)
+            # Higher recon error or KL divergence suggests anomaly
+            # Higher task scores suggest specific attacks
+            # Simple weighted sum example - weights might differ from training weights
+            combined_score = (scores['recon_error'] * 0.5 +
+                              scores['kl_divergence'] * 0.2 +
+                              scores.get('flip', 0) * 0.15 + # Use get for safety
+                              scores.get('scale', 0) * 0.15)
+            scores['combined_vae'] = combined_score
+
+
         return scores
-    
+
     def save(self, path: str) -> None:
-        """Save model to file."""
+        """Save model state and configuration."""
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         torch.save({
-            'model_state_dict': self.state_dict(),
-            'scaler': self.scaler,
-            'config': {
-                'input_dim': self.input_dim,
-                'latent_dim': self.latent_dim,
-                'hidden_dims': self.hidden_dims,
-                'conv_dims': self.conv_dims,
-                'kernel_size': self.kernel_size,
-                'learning_rate': self.learning_rate,
-                'dropout': self.dropout
-            }
+            'version': '1.0.0', # Add versioning if needed
+            'state_dict': self.state_dict(),
+            'config': self.config,
+            'loss_weights': self.loss_weights
         }, path)
-    
+        print(f"VAE model saved to {path}")
+
     @classmethod
-    def load(cls, path: str, device: str = 'cuda' if torch.cuda.is_available() else 'cpu') -> 'VariationalAutoencoder':
-        """Load model from file."""
-        checkpoint = torch.load(path, map_location=device)
-        model = cls(
-            input_dim=checkpoint['config']['input_dim'],
-            latent_dim=checkpoint['config']['latent_dim'],
-            hidden_dims=checkpoint['config']['hidden_dims'],
-            conv_dims=checkpoint['config']['conv_dims'],
-            kernel_size=checkpoint['config']['kernel_size'],
-            learning_rate=checkpoint['config']['learning_rate'],
-            dropout=checkpoint['config']['dropout'],
-            device=device
-        )
-        model.load_state_dict(checkpoint['model_state_dict'])
-        model.scaler = checkpoint['scaler']
+    def load(cls, path: str, device: str = None) -> 'VariationalAutoencoder':
+        """Load model state and configuration."""
+        if not Path(path).exists():
+            raise FileNotFoundError(f"Model file {path} not found")
+
+        # Determine map location based on device preference and availability
+        if device:
+            map_location = torch.device(device)
+        else:
+            map_location = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        checkpoint = torch.load(path, map_location=map_location)
+
+        # Ensure config compatibility if versions change later
+        config = checkpoint.get('config')
+        loss_weights = checkpoint.get('loss_weights', {}) # Load loss weights too
+
+        model = cls(config=config) # Re-initialize with saved config
+        model.loss_weights = loss_weights # Restore loss weights
+        model.load_state_dict(checkpoint['state_dict'])
+        model.to(map_location) # Ensure model is on the correct device
+        print(f"VAE model loaded from {path} to device {map_location}")
         return model
-    
-    @classmethod
-    def from_config(cls, config_path: str = 'config.yaml', device: str = 'cuda' if torch.cuda.is_available() else 'cpu') -> 'VariationalAutoencoder':
-        """
-        Create instance from configuration file.
-        
-        Args:
-            config_path: Path to YAML configuration file
-            device: Device to run the model on
-            
-        Returns:
-            Configured VariationalAutoencoder instance
-        """
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f).get('models', {}).get('vae', {})
-        
-        return cls(
-            input_dim=config.get('input_dim', 50),
-            latent_dim=config.get('latent_dim', 10),
-            hidden_dims=config.get('hidden_dims'),
-            conv_dims=config.get('conv_dims'),
-            kernel_size=config.get('kernel_size', 3),
-            learning_rate=config.get('learning_rate', 1e-3),
-            dropout=config.get('dropout', 0.2),
-            batch_size=config.get('batch_size', 32),
-            epochs=config.get('epochs', 100),
-            patience=config.get('patience', 10),
-            reconstruction_loss_weight=config.get('reconstruction_loss_weight', 1.0),
-            device=device
-        )

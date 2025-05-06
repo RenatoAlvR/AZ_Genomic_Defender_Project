@@ -28,18 +28,11 @@ preprocessing:
 
 # === Model Selection ===
 models:
-  EIF:  #Parameters for the extended isolation forest
-    enable: true
-    n_trees: 200            #More trees improve stability, but increase time
-    sample_size: 512         #Controls how many samples each tree sees
-    extension_level: 15       #For PCA reduced matrices, try and stay in the 5 - 50 interval, the higher the value, the higher is the computational cost
-    contamination: 0.05      #Adjust based on your expected anomaly ratio (expected poisoned data in this case)
-    random_state: 42         #Ensure reproducibility (don´t make it none)
   VAE:
     enable: true
-    input_dim: 50          # Should match PCA dimensions from preprocessor
-    latent_dim: 10
-    hidden_dims: [32, 16]  # List of hidden layer sizes
+    input_dim: 20000          # Should match PCA dimensions from preprocessor
+    latent_dim: 64
+    hidden_dims: [512, 256]  # List of hidden layer sizes
     conv_dims: null        # Optional list of conv layer channels
     kernel_size: 3
     learning_rate: 0.001
@@ -48,6 +41,12 @@ models:
     epochs: 200
     patience: 20
     reconstruction_loss_weight: 1.0
+    head_dropout: 0.2
+    loss weights:
+      recon: 0.6
+      kl: 0.1
+      flip: 0.2
+      scale: 0.1
   GNN:
     enable: true
     SynCell: false
@@ -65,6 +64,7 @@ models:
       learning_rate: 0.001        # Learning rate
       epochs: 200                 # Max training epochs
       patience: 20               # Early stopping patience
+      weight_decay: 1e-5 
     loss_weights:
       recon: 0.4
       synth: 0.3

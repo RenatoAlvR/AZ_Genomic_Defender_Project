@@ -45,8 +45,6 @@ def parse_arguments():
                        help='Logging level')
     parser.add_argument('--force_retrain', action='store_true',
                       help='Force full retrain of all models (including non-EIF)')
-    parser.add_argument('--output_dir', type=str, default='results',
-                      help='Directory to save results')
     
     return parser.parse_args()
 
