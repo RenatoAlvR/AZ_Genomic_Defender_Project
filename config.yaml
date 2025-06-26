@@ -1,158 +1,115 @@
 # =========================
-#  CONFIG FILE FOR GENOMIC POISONING DETECTOR
+# CONFIG FILE FOR GENOMIC POISONING DETECTOR (Minimal for SynCell via CAE & GNN-AE)
 # =========================
 
 # === General Settings ===
-experiment_name: "breast_cancer_clean_v1"
+experiment_name: "syn_cell_detect_quick_v1"
 seed: 42
-log_to_file: true
-log_file_path: "logs/run_01.log"
+output_base_dir: "outputs" # Unified output directory for logs, models, results
 
-# === Data Settings ===
-data:
-  raw_path: "data/raw_dataset.csv"
-  graph_path: "data/graph_edges.csv"
-  output_dir: "outputs/"
-  use_graph: true
-  build_graph_from_expression: true  # If true, build k-NN graph from gene expression matrix
+logging:
+  level: "INFO" # DEBUG, INFO, WARNING, ERROR
+  log_to_file: true
+  # log_file_path will be set programmatically, e.g., outputs/logs/run_timestamp.log
+
+# === Data Settings (Primarily for preprocessor input paths if not CLI) ===
+# These paths are usually provided via CLI in main.py.
+# data:
+#   matrix_path: "path/to/your/matrix.mtx"
+#   features_path: "path/to/your/features.tsv"
+#   barcodes_path: "path/to/your/barcodes.tsv"
 
 # === Preprocessing Settings ===
 preprocessing:
-  min_genes_per_cell: 200
+  min_genes_per_cell: 100    # Adjusted for potentially sparse data
   min_cells_per_gene: 3
-  n_pca_components: 50
-  n_neighbors: 15
-  normalize: log1p
-  scale: true
+  n_top_genes: 3000         # Number of Highly Variable Genes to select (CRUCIAL)
+  n_pca_components: 50      # Final dimension after PCA, input_dim for models
+  n_neighbors_graph: 15     # For k-NN graph construction for GNN
+  normalize_method: "log1p" # e.g., log1p, cpm
+  scale_data: true
+  split_ratio: 0.8          # Train/validation split ratio
   random_state: 42
 
-# === Model Selection ===
-models:
-  VAE:
-    enable: true
-    input_dim: 20000          # Should match PCA dimensions from preprocessor
-    latent_dim: 64
-    hidden_dims: [512, 256]  # List of hidden layer sizes
-    conv_dims: null        # Optional list of conv layer channels
-    kernel_size: 3
-    learning_rate: 0.001
-    dropout: 0.2
-    batch_size: 64
-    epochs: 200
-    patience: 20
-    reconstruction_loss_weight: 1.0
-    head_dropout: 0.2
-    loss weights:
-      recon: 0.6
-      kl: 0.1
-      flip: 0.2
-      scale: 0.1
-  GNN:
-    enable: true
-    SynCell: false
-    LabelFlip: false
-    InjNoise: false
-    input_dim: 20000            # Should match PCA dimensions from preprocessor
-    hidden_dims: [64, 32]       # List of hidden layer sizes
-    latent_dim: 16              # Latent space dimension
-    dropout: 0.3                # Dropout rate
-    num_conv_layers: 3          # Number of GNN layers
-    conv_type: 'GCN'            # Options: GCN, GAT, GraphSAGE
-    heads: 4                    # For GAT
-    edge_dropout: 0.2  
-    training:
-      learning_rate: 0.001        # Learning rate
-      epochs: 200                 # Max training epochs
-      patience: 20               # Early stopping patience
-      weight_decay: 1e-5 
-    loss_weights:
-      recon: 0.4
-      synth: 0.3
-      flip: 0.2
-      noise: 0.1
-  DDPM:
-    enabled: true
-    noise_steps: 1000
-    learning_rate: 0.0001
-  ContrastiveAE:
-    enable: true
-    SynCell: true
-    GenScal: false
-    Batch: false
-    input_dim: 20000       # Should match PCA dimensions from preprocessor
-    hidden_dims: [128, 64] # List of hidden layer sizes
-    shared_dims: [1024, 512, 256]
-    latent_dim: 128        # Latent space dimension
-    temperature: 0.5       # Contrastive loss temperature
-    dropout: 0.2           # Dropout rate
-    alpha: 0.7             # Weight for contrastive loss
-    beta: 0.3
-    learning_rate: 0.001   # Learning rate
-    batch_size: 64         # Batch size
-    epochs: 150            # Max training epochs
-    patience: 15           # Early stopping patience
+# === Model Global Config ===
+# Common settings applied if not overridden in model-specific sections
+global_model_config:
+  device: "auto"            # "auto", "cuda", "cpu"
+  use_mixed_precision: true # For GPU training efficiency
+  num_workers: 0            # For DataLoaders (0 for main process on Windows)
 
-# === Detection Fusion Strategy ===
-fusion:
-  method: "weighted_vote"  # Options: majority_vote, weighted_vote, ensemble_nn
+# === Model Specific Configurations ===
+GNN: # Graph Neural Network Autoencoder
+  enable: true
+  model_class_name: "GNNAutoencoder" # For dynamic loading
+  # Task-specific head enabling
+  SynCell: true             # Enable Synthetic Cell detection head
+  LabelFlip: false
+  InjNoise: false
+  # Architecture (input_dim will be set from n_pca_components)
+  # input_dim: set_by_preprocessor (n_pca_components)
+  hidden_dims: [128, 64]    # GNN hidden layers
+  latent_dim: 32
+  dropout: 0.2
+  edge_dropout: 0.1
+  conv_type: 'GCN'
+  heads: 4                  # For GATConv if used
+  num_conv_layers: 2        # Should match length of hidden_dims generally
+  # Training
+  use_graph_sampling: true  # CRUCIAL for low-resource. Uses NeighborLoader.
+  batch_size: 128           # Num seed nodes for NeighborLoader / batch for full graph
+  num_neighbors: [10, 5]    # Fan-out for NeighborLoader (len must match num_conv_layers)
+  epochs: 50                # Max epochs
+  patience: 10              # Early stopping patience
+  learning_rate: 0.001
+  weight_decay: 0.00001
+  # Loss weights (only SynCell and recon are relevant now)
+  loss_weights:
+    recon: 0.7
+    synth: 0.3
+    flip: 0.0
+    noise: 0.0
+
+CAE: # Contrastive Autoencoder (or general AE for this quick setup)
+  enable: true
+  model_class_name: "ContrastiveAutoencoder" # Or your specific CAE class name
+  # Task-specific flags (CAE might use reconstruction error for SynCell or have a head)
+  SynCell: true             # Indicates this model contributes to SynCell detection
+  # Architecture (input_dim will be set from n_pca_components)
+  # input_dim: set_by_preprocessor (n_pca_components)
+  hidden_dims: [256, 128]   # Encoder hidden layers
+  latent_dim: 64
+  dropout: 0.2
+  # For actual Contrastive loss (if used, otherwise it's a standard AE)
+  # temperature: 0.07
+  # projection_dim: 128 # Dimension of the projection head for contrastive loss
+  # Training
+  batch_size: 128           # Batch size for feature matrix
+  epochs: 50
+  patience: 10
+  learning_rate: 0.001
+  weight_decay: 0.00001
+  # Loss weights (e.g., if it has reconstruction + a specific SynCell head loss or contrastive loss)
+  loss_weights:
+    recon: 1.0              # Example: if primarily reconstruction-based for anomaly
+    # contrastive: 0.5      # If actual contrastive training
+    # syn_head: 0.5         # If it has a dedicated supervised head for syn_cell
+
+VAE:
+  enable: false
+  # ... (params can remain for future use, but won't be loaded if enable=false) ...
+
+DDPM:
+  enable: false
+  # ... (params can remain for future use, but won't be loaded if enable=false) ...
+
+# === Detection Fusion Strategy (Simplified for CAE & GNN-AE) ===
+# This section would be used by your PoisonDetector class
+detection_fusion:
+  method: "weighted_average"
+  # Weights for models active in SynCell detection
+  # The keys here should match how models are identified in the detection results
   weights:
-    EIF: 1.0
-    VAE: 1.5
-    GNN: 1.5
-    DDPM: 2.0
-    ContrastiveAE: 2.0
-  threshold: 0.6
-
-# === Incremental Training ===
-incremental_training:
-  enabled: true
-  update_interval: 1  # Number of new data batches before retraining
-  max_history: 10     # Keep last N batches for retraining
-
-# Genome Guardian Configuration
-detection:
-  # Model loading and validation
-  models_dir: "training/trained_models"  # Path relative to project root
-  required_models:  # Must match these filenames
-    - "eif.pt"
-    - "vae.pt"
-    - "gnn.pt"
-    - "contrastive_ae.pt"
-    - "ddpm.pt"
-  
-  # Model-specific detection thresholds
-  thresholds:
-    eif: 0.95  # Contamination parameter
-    vae: 0.01  # Reconstruction error percentile
-    gnn: 0.85  # Graph anomaly threshold
-    contrastive_ae: 0.90  # Similarity threshold
-    ddpm: 0.80  # Denoising confidence
-  
-  # Decision fusion configuration
-  fusion:
-    method: "weighted_average"  # Options: [weighted_average, voting, stacking]
-    weights:
-      eif: 0.15
-      vae: 0.20
-      gnn: 0.25
-      contrastive_ae: 0.15
-      ddpm: 0.15
-    consensus_threshold: 0.7  # Minimum agreement for voting method
-  
-  # Hardware settings
-  hardware:
-    device: "auto"  # Options: [auto, cpu, cuda]
-    batch_size: 64  # For batch processing
-    num_workers: 4  # For data loading
-
-  # Logging and output
-  logging:
-    level: "INFO"  # DEBUG, INFO, WARNING, ERROR
-    save_scores: true
-    output_dir: "results/detection_outputs"
-
-# === Evaluation ===
-evaluation:
-  run_on_validation_set: true
-  report_metrics: ["precision", "recall", "AUC"]
-
+    GNNAutoencoder: 0.6      # Example weight
+    ContrastiveAutoencoder: 0.4 # Example weight
+  final_threshold: 0.5         # Threshold on the fused score

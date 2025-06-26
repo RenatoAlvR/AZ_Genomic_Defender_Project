@@ -1,289 +1,292 @@
+# gnn_ae_trainer.py
 import torch
 import torch.nn.functional as F
 import numpy as np
 from pathlib import Path
-from typing import Dict, Any, Optional
-# Ensure GNNAutoencoder is importable, adjust path if needed
-# from ..models.gnn_ae_model import GNNAutoencoder
+from typing import Dict, Any, Optional, Union, List
 from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader
+from torch_geometric.loader import DataLoader as GraphDataLoader # Full graph loader
+from torch_geometric.loader import NeighborLoader # Graph sampling loader
 from tqdm import tqdm
 import logging
-import os # Import os for path manipulation
+import os
+from torch.cuda.amp import autocast, GradScaler
 
 # Get logger for this module
-logger = logging.getLogger(__name__) # Use module's name for logger
+logger = logging.getLogger(__name__)
 
 class GNNAETrainer:
     """
     Trainer for the GNN-Autoencoder model.
 
-    Handles training loops, validation, early stopping, and saving the final model.
+    Handles training loops, validation, early stopping, graph sampling for large graphs,
+    mixed-precision training, and saving the final model.
 
     Args:
         config: Dictionary containing overall configuration.
         model: Initialized GNNAutoencoder instance.
         output_dir: Base directory for saving outputs (e.g., 'training').
     """
-    def __init__(self, config: Dict[str, Any], model, output_dir: str = 'training'):
-        # Ensure model is the GNNAutoencoder class (or duck-typed equivalent)
-        # assert isinstance(model, GNNAutoencoder), "Model must be an instance of GNNAutoencoder"
-
-        self.config = config.get('GNN', {}) # Extract GNN-specific config, default to empty dict if not found
-        if not self.config:
-             logger.warning("GNN configuration not found in main config.")
+    def __init__(self, main_config: Dict[str, Any], model, output_dir: str = 'training'):
+        self.main_config = main_config
+        self.gnn_config = main_config.get('GNN', {})
+        if not self.gnn_config:
+            logger.warning("GNN configuration section not found in main config. Using defaults.")
 
         self.model = model
-        self.device = torch.device(self.config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu'))
+        self.device = torch.device(self.gnn_config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu'))
         self.model.to(self.device)
 
-        # Training parameters from config with defaults
-        self.epochs = self.config.get('epochs', 100) # Default epochs
-        self.patience = self.config.get('patience', 20) # Default patience
-        lr = self.config.get('learning_rate', 1e-3) # Default LR
-        weight_decay = self.config.get('weight_decay', 1e-5) # Default weight decay
+        # Training parameters
+        self.epochs = self.gnn_config.get('epochs', 50) # Reduced default for potentially longer epochs with sampling
+        self.patience = self.gnn_config.get('patience', 10)
+        lr = self.gnn_config.get('learning_rate', 1e-3)
+        weight_decay = self.gnn_config.get('weight_decay', 1e-5) # Make weight_decay configurable
 
-        # Check if required model loss weights exist
+        # Graph Sampling Config
+        self.use_graph_sampling = self.gnn_config.get('use_graph_sampling', True) # Default to True for low-resource
+        self.loader_batch_size = self.gnn_config.get('batch_size', 64) # For seed nodes if sampling, else ignored
+        self.num_neighbors = self.gnn_config.get('num_neighbors', [10, 5]) # Fan-out for NeighborLoader
+
         if not hasattr(model, 'loss_weights') or not model.loss_weights:
-             logger.error("Model instance does not have 'loss_weights' attribute or it's empty.")
-             raise ValueError("Model loss_weights are required for training.")
-        self.loss_weights = model.loss_weights # Use weights defined in the model
+            logger.error("Model instance does not have 'loss_weights' attribute or it's empty.")
+            raise ValueError("Model loss_weights are required for training.")
+        self.loss_weights = model.loss_weights
 
-        # Optimizer
-        self.optimizer = torch.optim.Adam(
-            self.model.parameters(),
-            lr=lr,
-            weight_decay=weight_decay
-        )
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
 
-        # Directories
+        # Mixed Precision Scaler (only if CUDA is used and enabled)
+        self.use_amp = self.gnn_config.get('use_mixed_precision', True) and self.device.type == 'cuda'
+        self.scaler = GradScaler(enabled=self.use_amp)
+        if self.use_amp:
+            logger.info("Mixed precision training (AMP) is ENABLED for GNN-AE on GPU.")
+        elif self.device.type == 'cuda':
+             logger.info("Mixed precision training (AMP) is DISABLED for GNN-AE on GPU.")
+
+
         self.base_output_dir = Path(output_dir)
-        self.checkpoint_dir = self.base_output_dir / 'checkpoints' # Subdir for temp checkpoints
-        self.final_model_dir = self.base_output_dir / 'trained_models' # The required final dir
-        self.final_model_path = self.final_model_dir / 'gnn_ae_model.pth' # Specific final model file
+        self.checkpoint_dir = self.base_output_dir / 'checkpoints'
+        self.final_model_dir = self.base_output_dir / 'trained_models'
+        self.final_model_path = self.final_model_dir / f"{self.model.__class__.__name__.lower()}_model.pth" # Use model class name
 
-        # Ensure directories exist
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.final_model_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"GNN-AE Trainer initialized. Device: {self.device}")
-        logger.info(f"Checkpoints will be saved in: {self.checkpoint_dir}")
-        logger.info(f"Final model will be saved to: {self.final_model_path}")
+        logger.info(f"{self.model.__class__.__name__} Trainer initialized. Device: {self.device}, Output Path: {self.final_model_path}")
 
-
-    def train(self, train_data: Data, val_data: Optional[Data] = None):
-        """
-        Full training loop with validation and early stopping.
-
-        Args:
-            train_data: PyG Data object for training (assumed single graph).
-            val_data: Optional PyG Data object for validation (assumed single graph).
-        """
+    def train(self, train_graph_data: Data, val_graph_data: Optional[Data] = None):
         best_val_loss = np.inf
         epochs_no_improve = 0
         best_epoch = 0
 
-        # Create DataLoaders (handles full-batch case correctly)
-        train_loader = self._create_dataloader(train_data)
-        val_loader = self._create_dataloader(val_data) if val_data else None
+        # Create DataLoaders based on config (full graph or sampling)
+        train_loader = self._create_dataloader(train_graph_data, is_training=True)
+        val_loader = self._create_dataloader(val_graph_data, is_training=False) if val_graph_data else None
 
-        logger.info("Starting GNN-AE training...")
+        if not train_loader:
+            logger.error("Failed to create training DataLoader. Aborting GNN-AE training.")
+            return
+
+        logger.info(f"Starting {self.model.__class__.__name__} training for {self.epochs} epochs...")
         for epoch in range(1, self.epochs + 1):
-            # Training epoch
-            train_loss_dict = self._run_epoch(train_loader, is_training=True)
+            train_loss_dict = self._run_epoch(train_loader, is_training=True, epoch_num=epoch)
             avg_train_loss = train_loss_dict['total_loss']
 
-            # Validation epoch
             val_loss_str = ""
-            current_loss_for_stopping = avg_train_loss # Use train loss if no validation
+            current_loss_for_stopping = avg_train_loss
             if val_loader:
-                val_loss_dict = self._run_epoch(val_loader, is_training=False)
+                val_loss_dict = self._run_epoch(val_loader, is_training=False, epoch_num=epoch)
                 avg_val_loss = val_loss_dict['total_loss']
-                current_loss_for_stopping = avg_val_loss # Use val loss if available
+                current_loss_for_stopping = avg_val_loss
                 val_loss_str = f" | Val Loss {avg_val_loss:.4f}"
-                # Log detailed validation losses
                 val_detail_str = ", ".join([f"Val_{k}: {v:.4f}" for k, v in val_loss_dict.items() if k != 'total_loss'])
                 if val_detail_str: val_loss_str += f" ({val_detail_str})"
-
-
-            # Log epoch results
+            
             train_detail_str = ", ".join([f"Train_{k}: {v:.4f}" for k, v in train_loss_dict.items() if k != 'total_loss'])
             logger.info(f"Epoch {epoch}/{self.epochs}: Train Loss {avg_train_loss:.4f} ({train_detail_str}){val_loss_str}")
 
-            # Checkpoint saving and Early stopping
             if current_loss_for_stopping < best_val_loss:
                 best_val_loss = current_loss_for_stopping
                 epochs_no_improve = 0
                 best_epoch = epoch
-                self._save_checkpoint(epoch, 'best_gnnae.pt')
-                logger.info(f"New best model saved at epoch {epoch} with loss {best_val_loss:.4f}")
+                self._save_checkpoint(epoch, f'best_{self.model.__class__.__name__.lower()}.pt')
+                logger.info(f"New best GNN-AE model saved at epoch {epoch} with loss {best_val_loss:.4f}")
             else:
                 epochs_no_improve += 1
                 if epochs_no_improve >= self.patience:
-                    logger.info(f"Early stopping triggered at epoch {epoch} after {self.patience} epochs without improvement.")
+                    logger.info(f"GNN-AE early stopping at epoch {epoch} after {self.patience} epochs.")
                     break
+        
+        logger.info(f"GNN-AE training finished. Best epoch: {best_epoch}, Best loss: {best_val_loss:.4f}")
 
-            # Optionally save a 'latest' checkpoint periodically or always
-            # self._save_checkpoint(epoch, 'latest_gnnae.pt')
-
-        logger.info(f"Training finished. Best epoch: {best_epoch}, Best validation loss: {best_val_loss:.4f}")
-
-        # Load the best performing model state from checkpoint
         try:
-            self._load_checkpoint('best_gnnae.pt')
-            logger.info("Loaded best model state from checkpoint.")
-
-            # Save the final best model to the required directory
-            self.model.save(self.final_model_path) # Use the model's own save method
+            self._load_checkpoint(f'best_{self.model.__class__.__name__.lower()}.pt')
+            logger.info("Loaded best GNN-AE model state from checkpoint.")
+            self.model.save(self.final_model_path)
             logger.info(f"Final best GNN-AE model saved successfully to {self.final_model_path}")
-
         except FileNotFoundError:
-             logger.error(f"Failed to load best checkpoint 'best_gnnae.pt'. Final model not saved.")
+            logger.error(f"Failed to load best GNN-AE checkpoint. Final model NOT saved to {self.final_model_path}")
         except Exception as e:
-             logger.error(f"An error occurred during final model saving: {e}", exc_info=True)
+            logger.error(f"Error during final GNN-AE model saving: {e}", exc_info=True)
 
-
-    def _calculate_combined_loss(self, outputs: Dict[str, torch.Tensor], batch: Data) -> Dict[str, torch.Tensor]:
-        """Calculates individual and combined weighted loss components."""
+    def _calculate_combined_loss(self, outputs: Dict[str, torch.Tensor], batch: Union[Data, Any]) -> Dict[str, torch.Tensor]:
         losses = {}
+        
+        # Determine target features (batch.x for full graph, batch.x[:batch.batch_size] for NeighborLoader)
+        target_x = batch.x
+        if hasattr(batch, 'batch_size') and self.use_graph_sampling : # NeighborLoader puts seed nodes first
+             target_x = batch.x[:batch.batch_size]
+             # Also, model output 'recon' might be for all nodes in the subgraph, need to slice it for loss.
+             outputs['recon'] = outputs['recon'][:batch.batch_size]
 
-        # Reconstruction Loss (always present)
-        losses['recon'] = F.mse_loss(outputs['recon'], batch.x)
 
-        # Supervised Losses - Use BCEWithLogitsLoss for raw logits output
-        if 'synth' in outputs and hasattr(batch, 'synth_labels'):
-            # Assuming SyntheticHead outputs sigmoid probabilities (as per original GNN code)
-            losses['synth'] = F.binary_cross_entropy(outputs['synth'].squeeze(-1), batch.synth_labels.float())
-        else:
-             losses['synth'] = torch.tensor(0.0, device=self.device) # Placeholder if not active or labels missing
+        losses['recon'] = F.mse_loss(outputs['recon'], target_x)
 
-        if 'flip' in outputs and hasattr(batch, 'flip_labels'):
-            # Assuming LabelFlipHead outputs raw logits (as per original GNN code)
-             losses['flip'] = F.binary_cross_entropy_with_logits(outputs['flip'].squeeze(-1), batch.flip_labels.float())
-        else:
-             losses['flip'] = torch.tensor(0.0, device=self.device)
+        # Helper for supervised losses
+        def get_supervised_loss(task_name: str, output_key: str, label_attr: str, use_logits: bool):
+            if output_key in outputs and hasattr(batch, label_attr):
+                pred = outputs[output_key]
+                labels = getattr(batch, label_attr)
+                
+                # Slice predictions and labels if using NeighborLoader (only for seed nodes)
+                if hasattr(batch, 'batch_size') and self.use_graph_sampling:
+                    pred = pred[:batch.batch_size]
+                    labels = labels[:batch.batch_size] # Assuming labels on Data obj are for all nodes
 
-        if 'noise' in outputs and hasattr(batch, 'noise_labels'):
-             # Assuming NoiseHead outputs sigmoid probabilities (as per original GNN code)
-             # Need to handle potential shape mismatch if noise output is feature-wise
-             noise_pred = outputs['noise']
-             if noise_pred.dim() > 1 and noise_pred.shape[1] > 1:
-                 # Example: if predicting per-feature noise prob, maybe average or use appropriate target shape
-                 noise_pred = noise_pred.mean(dim=1) # Or adapt based on label format
-             losses['noise'] = F.binary_cross_entropy(noise_pred.squeeze(-1), batch.noise_labels.float())
-        else:
-             losses['noise'] = torch.tensor(0.0, device=self.device)
+                if pred.dim() > 1 and pred.shape[1] > 1 and task_name == 'noise': # Specific for NoiseHead output
+                    pred = pred.mean(dim=1)
+                
+                pred = pred.squeeze(-1) if pred.dim() > 1 and pred.shape[-1] == 1 else pred
 
-        # Calculate total weighted loss
+                if labels.numel() == 0 or pred.numel() == 0 or labels.shape[0] != pred.shape[0]:
+                    # logger.warning(f"Label/prediction shape mismatch or empty for {task_name}. Pred: {pred.shape}, Label: {labels.shape}")
+                    return torch.tensor(0.0, device=self.device)
+
+                if use_logits:
+                    return F.binary_cross_entropy_with_logits(pred, labels.float())
+                else:
+                    return F.binary_cross_entropy(pred, labels.float())
+            return torch.tensor(0.0, device=self.device)
+
+        losses['synth'] = get_supervised_loss('synth', 'synth', 'synth_labels', use_logits=False) # SyntheticHead outputs sigmoid
+        losses['flip']  = get_supervised_loss('flip',  'flip',  'flip_labels',  use_logits=True)  # LabelFlipHead outputs logits
+        losses['noise'] = get_supervised_loss('noise', 'noise', 'noise_labels', use_logits=False) # NoiseHead outputs sigmoid
+
         total_loss = torch.tensor(0.0, device=self.device)
         active_losses_found = False
         for loss_name, loss_value in losses.items():
-             weight = self.loss_weights.get(loss_name, 0) # Get weight from model's config
-             if weight > 0 and not torch.isnan(loss_value): # Only add if weight > 0 and loss is valid
-                 total_loss += weight * loss_value
-                 active_losses_found = True
-
-        if not active_losses_found:
-             logger.warning("No active loss components found with weight > 0. Total loss is 0.")
-
+            weight = self.loss_weights.get(loss_name, 0)
+            if weight > 0 and not torch.isnan(loss_value) and loss_value.numel() > 0 :
+                total_loss += weight * loss_value
+                active_losses_found = True
+        
+        if not active_losses_found and sum(self.loss_weights.values()) > 0:
+            logger.debug("No active loss components contributed to total_loss, or all weights are zero.")
+        
         losses['total_loss'] = total_loss
         return losses
 
-
-    def _run_epoch(self, data_loader: DataLoader, is_training: bool) -> Dict[str, float]:
-        """Runs a single epoch of training or validation."""
-        if is_training:
-            self.model.train()
-            context = torch.enable_grad() # Enable gradients for training
-            mode_desc = "Training"
-        else:
-            self.model.eval()
-            context = torch.no_grad() # Disable gradients for validation
-            mode_desc = "Validating"
+    def _run_epoch(self, data_loader: Union[GraphDataLoader, NeighborLoader], is_training: bool, epoch_num: int) -> Dict[str, float]:
+        self.model.train(is_training)
+        # context = torch.enable_grad() if is_training else torch.no_grad() # Redundant with model.train/eval for grads
+        mode_desc = "Training" if is_training else "Validating"
 
         total_losses_accum = { 'recon': 0.0, 'synth': 0.0, 'flip': 0.0, 'noise': 0.0, 'total_loss': 0.0 }
-        num_batches = 0
+        num_samples_processed = 0 # Count actual samples used for loss calculation
 
-        with context:
-            for batch in tqdm(data_loader, desc=f"{mode_desc} Epoch", leave=False):
-                batch = batch.to(self.device)
-                if is_training:
-                    self.optimizer.zero_grad()
+        # Use tqdm for progress bar
+        pbar_desc = f"{mode_desc} Epoch {epoch_num}"
+        pbar = tqdm(data_loader, desc=pbar_desc, leave=False)
 
-                # Forward pass
-                outputs = self.model(batch.x, batch.edge_index)
+        for batch_idx, batch_data in enumerate(pbar):
+            batch_data = batch_data.to(self.device)
+            
+            if is_training:
+                self.optimizer.zero_grad(set_to_none=True) # More memory efficient
 
-                # Calculate losses (using the corrected combined loss function)
-                # Ensure batch has necessary label attributes for the active heads
-                loss_dict = self._calculate_combined_loss(outputs, batch)
-                epoch_loss = loss_dict['total_loss']
+            with autocast(enabled=self.use_amp): # AMP
+                # For NeighborLoader, model needs to handle subgraph (batch_data) vs full graph.
+                # Assuming GNNAutoencoder's forward method takes (x, edge_index) from the batch.
+                outputs = self.model(batch_data.x, batch_data.edge_index)
+                loss_dict = self._calculate_combined_loss(outputs, batch_data)
+                current_loss = loss_dict['total_loss']
+            
+            current_batch_size = batch_data.batch_size if hasattr(batch_data, 'batch_size') and self.use_graph_sampling else batch_data.num_nodes
 
-                if is_training:
-                    if torch.isnan(epoch_loss):
-                        logger.warning(f"NaN loss detected during training. Skipping batch. Loss components: {loss_dict}")
-                        continue # Skip backprop if loss is NaN
-                    epoch_loss.backward()
-                    # Optional: Gradient clipping
-                    # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                    self.optimizer.step()
+            if is_training:
+                if torch.isnan(current_loss) or current_loss.numel() == 0:
+                    logger.warning(f"NaN or empty loss detected during training. Skipping batch. Loss: {current_loss}, Components: {loss_dict}")
+                    continue
+                self.scaler.scale(current_loss).backward() # AMP
+                self.scaler.step(self.optimizer) # AMP
+                self.scaler.update() # AMP
+            
+            for k, v in loss_dict.items():
+                if not torch.isnan(v) and v.numel() > 0:
+                    total_losses_accum[k] += v.item() * current_batch_size # Weight by batch size
+            num_samples_processed += current_batch_size
+            
+            # Update tqdm progress bar
+            if num_samples_processed > 0:
+                 pbar.set_postfix({k: f"{v / num_samples_processed:.4f}" for k,v in total_losses_accum.items()})
 
-                # Accumulate losses for reporting average
-                for k, v in loss_dict.items():
-                     if not torch.isnan(v): # Don't accumulate NaN values
-                         total_losses_accum[k] += v.item()
-                num_batches += 1
 
-        # Calculate average losses for the epoch
-        avg_losses = {k: v / num_batches if num_batches > 0 else 0.0 for k, v in total_losses_accum.items()}
+        avg_losses = {k: v / num_samples_processed if num_samples_processed > 0 else 0.0 for k, v in total_losses_accum.items()}
         return avg_losses
 
-
-    def _create_dataloader(self, data: Optional[Data]) -> Optional[DataLoader]:
-        """Create DataLoader for a single PyG Data object (full-batch)."""
-        if data is None:
+    def _create_dataloader(self, graph_data: Optional[Data], is_training: bool) -> Optional[Union[GraphDataLoader, NeighborLoader]]:
+        if graph_data is None:
             return None
+        
+        if not isinstance(graph_data, Data):
+            logger.error(f"Expected torch_geometric.data.Data object for GNN training, got {type(graph_data)}. Cannot create DataLoader.")
+            return None
+        if graph_data.x is None or graph_data.edge_index is None:
+             logger.error("Input graph_data is missing node features (x) or edge index (edge_index).")
+             return None
 
-        # Note: shuffle=True has no effect for a dataset of size 1
-        # Batch size from config, assuming full-batch if not specified or 1.
-        batch_size = self.config.get('batch_size', 1)
-        if batch_size != 1:
-            logger.warning(f"Batch size is {batch_size} but input is a single Data object. Effective batch size is 1 (full graph).")
-            batch_size = 1 # Force batch size 1 for single Data object
 
-        return DataLoader(
-            [data], # DataLoader expects a dataset (list of Data objects)
-            batch_size=batch_size, # Effectively always 1 for this setup
-            shuffle=False # Shuffle is meaningless here
-        )
+        if self.use_graph_sampling:
+            logger.info(f"Using NeighborLoader for GNN data. Batch size (seed nodes): {self.loader_batch_size}, Num neighbors: {self.num_neighbors}")
+            return NeighborLoader(
+                graph_data,
+                num_neighbors=self.num_neighbors,
+                batch_size=self.loader_batch_size,
+                shuffle=is_training, # Shuffle only for training
+                num_workers=self.gnn_config.get('num_workers', 0), # Configurable num_workers
+                pin_memory=self.device.type == 'cuda' # Pin memory if on CUDA
+            )
+        else:
+            logger.info("Using full graph DataLoader for GNN data (batch_size=1).")
+            # Full graph training, batch_size is effectively 1 (one graph)
+            return GraphDataLoader([graph_data], batch_size=1, shuffle=False) # No shuffle for single graph
 
     def _save_checkpoint(self, epoch: int, filename: str):
-        """Save model and optimizer state to the checkpoint directory."""
         save_path = self.checkpoint_dir / filename
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'model_config': self.model.config, # Save model's internal config
-            'loss_weights': self.loss_weights # Save weights used during training
+            'scaler_state_dict': self.scaler.state_dict() if self.use_amp else None, # Save scaler state
+            'model_config': self.model.config,
+            'loss_weights': self.loss_weights
         }
         try:
             torch.save(checkpoint, save_path)
-            # logger.debug(f"Checkpoint saved to {save_path}") # Use debug level for frequent saves
         except Exception as e:
-             logger.error(f"Failed to save checkpoint {save_path}: {e}")
-
+            logger.error(f"Failed to save GNN-AE checkpoint {save_path}: {e}")
 
     def _load_checkpoint(self, filename: str):
-        """Load model and optimizer state from the checkpoint directory."""
         load_path = self.checkpoint_dir / filename
         if not load_path.exists():
-            raise FileNotFoundError(f"Checkpoint file not found: {load_path}")
-
+            raise FileNotFoundError(f"GNN-AE Checkpoint file not found: {load_path}")
         try:
             checkpoint = torch.load(load_path, map_location=self.device)
             self.model.load_state_dict(checkpoint['model_state_dict'])
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            logger.info(f"Loaded checkpoint from {load_path} (Epoch {checkpoint.get('epoch', 'N/A')})")
+            if self.use_amp and checkpoint.get('scaler_state_dict') is not None:
+                self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            logger.info(f"Loaded GNN-AE checkpoint from {load_path} (Epoch {checkpoint.get('epoch', 'N/A')})")
         except Exception as e:
-             logger.error(f"Failed to load checkpoint {load_path}: {e}", exc_info=True)
-             raise # Re-raise error after logging
+            logger.error(f"Failed to load GNN-AE checkpoint {load_path}: {e}", exc_info=True)
+            raise
