@@ -1,0 +1,16 @@
+model: vae
+input_dim: 3000
+hidden_dim: 512
+latent_dim: 64
+dropout: 0.2
+device: cuda
+loss_weights:
+  recon: 0.8
+  kl: 0.2
+detection_threshold: 0.95
+batch_size: 10000  # Preprocessing batch size
+k_neighbors: 5      # For GNN-AE (unused for VAE)
+train_batch_size: 32  # Training batch size
+epochs: 100
+learning_rate: 0.001
+patience: 20

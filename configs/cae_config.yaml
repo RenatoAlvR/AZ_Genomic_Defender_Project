@@ -1,0 +1,17 @@
+model: cae
+input_dim: 3000
+hidden_dim: 512
+latent_dim: 64
+contrastive_margin: 1.0
+dropout: 0.2
+device: cuda
+loss_weights:
+  recon: 0.7
+  contrastive: 0.3
+detection_threshold: 0.95
+batch_size: 10000  # Preprocessing batch size
+k_neighbors: 5      # For GNN-AE (unused for CAE)
+train_batch_size: 32  # Training batch size
+epochs: 100
+learning_rate: 0.001
+patience: 20

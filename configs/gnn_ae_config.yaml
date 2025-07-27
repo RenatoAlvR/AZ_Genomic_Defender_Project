@@ -1,0 +1,16 @@
+model: gnn_ae
+input_dim: 3000
+hidden_dim: 256
+latent_dim: 64
+conv_type: GCN
+dropout: 0.3
+edge_dropout: 0.2
+device: cuda
+loss_weight_recon: 1.0
+detection_threshold: 0.95
+batch_size: 10000  # Preprocessing batch size
+k_neighbors: 5      # For GNN-AE graph construction
+train_batch_size: 32  # Unused for GNN-AE (processes entire graph)
+epochs: 100
+learning_rate: 0.001
+patience: 20

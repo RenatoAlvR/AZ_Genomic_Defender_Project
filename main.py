@@ -1,112 +1,78 @@
 #!/usr/bin/env python3
 import argparse
 import yaml
-import pickle
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from training.trainer import train
+from detection.detector import detect
+from preprocessing.preprocess_train import preprocess_train
+from preprocessing.preprocess_detect import preprocess_detect
 
-from genomic_defender_v1.preprocessing.preprocessor import GenomicDataPreprocessor
-from genomic_defender_v1.training.trainer import ModelTrainer
-from genomic_defender_v1.detection.detector import PoisonDetector
-from genomic_defender_v1.utils.logger import GenomeGuardianLogger
-from genomic_defender_v1.utils.logger import _setup_logger
+def setup_logging(log_level: str, log_file: str = 'logs/genome_defender.log'):
+    """Set up logging to file and console."""
+    Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper()),
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
+    )
 
-def load_config(config_path: str) -> Dict[str, Any]:
+def load_config(config_path: str) -> dict:
     """Load configuration from YAML file."""
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    return config
-
-def parse_arguments():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='GenomeGuardian: Data Poisoning Detection for scRNA-seq Data')
-    
-    # Mode selection
-    mode_group = parser.add_mutually_exclusive_group(required=True)
-    mode_group.add_argument('--train', action='store_true', 
-                          help='Train models on input data')
-    mode_group.add_argument('--detect', action='store_true',
-                          help='Run detection using trained models')
-    
-    # Data input arguments
-    parser.add_argument('--matrix_path', type=str, required=True, 
-                       help='Path to .mtx matrix file')
-    parser.add_argument('--features_path', type=str, required=True, 
-                       help='Path to features.tsv file')
-    parser.add_argument('--barcodes_path', type=str, required=True, 
-                       help='Path to barcodes.tsv file')
-    
-    # Configuration arguments
-    parser.add_argument('--config_path', type=str, default='config.yaml',
-                       help='Path to config YAML file')
-    parser.add_argument('--log_level', type=str, default='INFO',
-                       choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-                       help='Logging level')
-    parser.add_argument('--force_retrain', action='store_true',
-                      help='Force full retrain of all models (including non-EIF)')
-    
-    return parser.parse_args()
-
-def save_results(results: Dict[str, Any]) -> None:
-    """Save detection results to fixed 'results' directory"""
-    output_dir = Path("results")
-    output_dir.mkdir(parents=True, exist_ok=True)  # Auto-create if missing
-    
-    with open(output_dir / 'detection_scores.pkl', 'wb') as f:
-        pickle.dump(results, f)
-    
-    with open(output_dir / 'report.txt', 'w') as f:
-        for model_name, scores in results['individual_scores'].items():
-            f.write(f"{model_name} scores:\n{scores}\n\n")
-        f.write(f"Final fused scores:\n{results['final_scores']}\n")
-    
-    logging.info(f"Results saved to {output_dir}")
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        return config
+    except Exception as e:
+        logging.error(f"Failed to load config: {e}")
+        raise
 
 def main():
-    # Parse arguments and setup
-    args = parse_arguments()
-    try:
-        config = load_config(args.config_path)
-    except Exception as e:
-        print(f"Failed to load config: {e}")
-        config = {}  # Fallback empty config
-    
-    # Initialize logger WITH the loaded config
-    logger = GenomeGuardianLogger(config=config.get('logging', {}))
-    _setup_logger(args.log_level)
-    
-    # Preprocess data
-    logging.info("Starting data preprocessing...")
-    preprocessor = GenomicDataPreprocessor(config=config)
-    processed_data = preprocessor.preprocess_pipeline(
-        matrix_path=args.matrix_path,
-        features_path=args.features_path,
-        barcodes_path=args.barcodes_path
-    )
-    logging.info("Data preprocessing completed.")
-    
-    if args.train:
-        # Training mode
-        logging.info("Initializing model trainer...")
-        trainer = ModelTrainer(config=config)
-        trainer.train_incrementally(
-            processed_data=processed_data,
-            force_retrain=args.force_retrain
-        )
-        logging.info("Training completed successfully.")
-        
-    elif args.detect:
-        # Detection mode
-        logging.info("Initializing poison detector...")
-        detector = PoisonDetector(config_path=args.config_path)
-        results = detector.run(processed_data)
-        save_results(results)  # Removed output_dir parameter
-        logging.info("Detection completed successfully.")
-        
-    else:
-        logging.error("No valid mode specified (use --train or --detect)")
-        raise ValueError("Must specify either --train or --detect")
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='GenomeDefender: scRNA-seq anomaly detection')
+    parser.add_argument('--mode', type=str, choices=['train', 'detect'], required=True,
+                        help='Mode: train or detect')
+    parser.add_argument('--model', type=str, choices=['cae', 'vae', 'gnn_ae', 'ddpm'], required=True,
+                        help='Model to use: cae, vae, gnn_ae, or ddpm')
+    parser.add_argument('--dataset', type=str, required=True,
+                        help='Directory containing 10x Genomics data (matrix.mtx, barcodes.tsv, features.tsv)')
+    parser.add_argument('--config', type=str, required=True,
+                        help='Path to model configuration YAML file')
+    parser.add_argument('--output', type=str, required=True,
+                        help='Path to save model weights (train) or anomaly scores (detect)')
+    parser.add_argument('--incremental', action='store_true',
+                        help='Enable incremental training (load pre-trained weights)')
+    parser.add_argument('--log_level', type=str, default='INFO',
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                        help='Logging level')
+    args = parser.parse_args()
+
+    # Setup logging
+    setup_logging(args.log_level)
+
+    # Load configuration
+    logging.info(f"Loading configuration from {args.config}")
+    config = load_config(args.config)
+    config['model'] = args.model  # Ensure model is set in config
+
+    # Validate dataset directory
+    dataset_dir = Path(args.dataset)
+    if not dataset_dir.is_dir():
+        logging.error(f"Dataset directory {dataset_dir} does not exist")
+        raise ValueError(f"Dataset directory {dataset_dir} does not exist")
+
+    # Run mode
+    if args.mode == 'train':
+        logging.info(f"Starting training for {args.model} on {args.dataset}")
+        train(args.config, args.dataset, args.model, args.output, args.incremental)
+        logging.info("Training completed successfully")
+    elif args.mode == 'detect':
+        logging.info(f"Starting detection for {args.model} on {args.dataset}")
+        detect(args.config, args.dataset, args.model, args.output)
+        logging.info("Detection completed successfully")
 
 if __name__ == '__main__':
     main()

@@ -65,6 +65,7 @@ tensorflow==2.19.0
 termcolor==3.0.1
 threadpoolctl==3.6.0
 torch==2.6.0
+torch-geometric
 tqdm==4.67.1
 typing_extensions==4.13.2
 tzdata==2025.2

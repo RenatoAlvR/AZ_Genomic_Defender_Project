@@ -39,69 +39,68 @@ global_model_config:
   num_workers: 0            # For DataLoaders (0 for main process on Windows)
 
 # === Model Specific Configurations ===
-GNN: # Graph Neural Network Autoencoder
-  enable: true
-  model_class_name: "GNNAutoencoder" # For dynamic loading
-  # Task-specific head enabling
-  SynCell: true             # Enable Synthetic Cell detection head
-  LabelFlip: false
-  InjNoise: false
-  # Architecture (input_dim will be set from n_pca_components)
-  # input_dim: set_by_preprocessor (n_pca_components)
-  hidden_dims: [128, 64]    # GNN hidden layers
-  latent_dim: 32
-  dropout: 0.2
-  edge_dropout: 0.1
-  conv_type: 'GCN'
-  heads: 4                  # For GATConv if used
-  num_conv_layers: 2        # Should match length of hidden_dims generally
-  # Training
-  use_graph_sampling: true  # CRUCIAL for low-resource. Uses NeighborLoader.
-  batch_size: 128           # Num seed nodes for NeighborLoader / batch for full graph
-  num_neighbors: [10, 5]    # Fan-out for NeighborLoader (len must match num_conv_layers)
-  epochs: 50                # Max epochs
-  patience: 10              # Early stopping patience
+GNN:  #gnn_ae_config.yaml
+  input_dim: 3000
+  hidden_dim: 256
+  latent_dim: 64
+  conv_type: GCN
+  dropout: 0.3
+  edge_dropout: 0.2
+  device: cuda
+  loss_weight_recon: 1.0
+  detection_threshold: 0.95
+  batch_size: 32  # Unused for GNN-AE (processes entire graph)
+  epochs: 100
   learning_rate: 0.001
-  weight_decay: 0.00001
-  # Loss weights (only SynCell and recon are relevant now)
+  patience: 20
+
+CAE: #cae_config.yaml
+  input_dim: 3000
+  hidden_dim: 512
+  latent_dim: 64
+  contrastive_margin: 1.0
+  dropout: 0.2
+  device: cuda
   loss_weights:
     recon: 0.7
-    synth: 0.3
-    flip: 0.0
-    noise: 0.0
+    contrastive: 0.3
+  detection_threshold: 0.95
+  batch_size: 32
+  epochs: 100
+  learning_rate: 0.001
+  patience: 20
 
-CAE: # Contrastive Autoencoder (or general AE for this quick setup)
-  enable: true
-  model_class_name: "ContrastiveAutoencoder" # Or your specific CAE class name
-  # Task-specific flags (CAE might use reconstruction error for SynCell or have a head)
-  SynCell: true             # Indicates this model contributes to SynCell detection
-  # Architecture (input_dim will be set from n_pca_components)
-  # input_dim: set_by_preprocessor (n_pca_components)
-  hidden_dims: [256, 128]   # Encoder hidden layers
+VAE:  #vae_config.yaml
+  input_dim: 3000
+  hidden_dim: 512
   latent_dim: 64
   dropout: 0.2
-  # For actual Contrastive loss (if used, otherwise it's a standard AE)
-  # temperature: 0.07
-  # projection_dim: 128 # Dimension of the projection head for contrastive loss
-  # Training
-  batch_size: 128           # Batch size for feature matrix
-  epochs: 50
-  patience: 10
-  learning_rate: 0.001
-  weight_decay: 0.00001
-  # Loss weights (e.g., if it has reconstruction + a specific SynCell head loss or contrastive loss)
+  device: cuda
   loss_weights:
-    recon: 1.0              # Example: if primarily reconstruction-based for anomaly
-    # contrastive: 0.5      # If actual contrastive training
-    # syn_head: 0.5         # If it has a dedicated supervised head for syn_cell
+    recon: 0.8
+    kl: 0.2
+  detection_threshold: 0.95
+  batch_size: 32
+  epochs: 100
+  learning_rate: 0.001
+  patience: 20
 
-VAE:
-  enable: false
-  # ... (params can remain for future use, but won't be loaded if enable=false) ...
-
-DDPM:
-  enable: false
-  # ... (params can remain for future use, but won't be loaded if enable=false) ...
+DDPM: #ddpm_config.yaml
+  input_dim: 3000
+  num_timesteps: 1000
+  beta_schedule: linear
+  beta_start: 0.0001
+  beta_end: 0.02
+  unet_model_channels: 64
+  unet_time_emb_dim: 64
+  unet_dropout: 0.1
+  detection_timestep: 500
+  device: cuda
+  detection_threshold: 0.95
+  batch_size: 32
+  epochs: 100
+  learning_rate: 0.001
+  patience: 20
 
 # === Detection Fusion Strategy (Simplified for CAE & GNN-AE) ===
 # This section would be used by your PoisonDetector class
