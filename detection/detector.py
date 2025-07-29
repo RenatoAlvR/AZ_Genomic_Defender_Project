@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 from torch_geometric.data import Data
 from preprocessing.preprocess_detect import preprocess_detect
-from models.CAE import ContrastiveAutoencoder
+from models.cae_model import ContrastiveAutoencoder
 from models.vae_model import VariationalAutoencoder
 from models.gnn_model import GNNAutoencoder
 from models.ddpm_model import DenoisingDiffusionPM

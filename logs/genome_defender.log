@@ -1,0 +1,39 @@
+2025-07-28 21:09:04,185 - INFO - Loading configuration from configs/cae_config.yaml
+2025-07-28 21:09:04,185 - INFO - Starting training for cae on data/GSM4909253
+2025-07-28 21:11:35,995 - INFO - Loading configuration from configs/cae_config.yaml
+2025-07-28 21:11:35,996 - INFO - Starting training for cae on data/GSM4909253
+2025-07-28 21:20:21,980 - INFO - Loading configuration from configs/cae_config.yaml
+2025-07-28 21:20:21,981 - INFO - Starting training for cae on data/GSM4909253
+2025-07-28 21:27:04,311 - INFO - Loading configuration from configs/cae_config.yaml
+2025-07-28 21:27:04,312 - INFO - Starting training for cae on data/GSM4909253
+2025-07-28 22:00:15,860 - INFO - Loading configuration from configs/cae_config.yaml
+2025-07-28 22:00:15,861 - INFO - Starting training for cae on data/GSM4909253
+2025-07-28 23:21:15,694 - INFO - Loading configuration from configs/cae_config.yaml
+2025-07-28 23:21:15,695 - INFO - Starting training for cae on data/GSM4909253
+2025-07-28 23:26:50,659 - INFO - Training completed successfully
+2025-07-28 23:37:52,210 - INFO - Loading configuration from configs/vae_conig.yaml
+2025-07-28 23:37:52,210 - ERROR - Failed to load config: [Errno 2] No such file or directory: 'configs/vae_conig.yaml'
+2025-07-28 23:38:05,150 - INFO - Loading configuration from configs/vae_config.yaml
+2025-07-28 23:38:05,151 - INFO - Starting training for vae on data/GSM4909253
+2025-07-28 23:41:47,041 - INFO - Training completed successfully
+2025-07-28 23:57:19,461 - INFO - Loading configuration from configs/gnn_ae_config.yaml
+2025-07-28 23:57:19,463 - INFO - Starting training for gnn_ae on data/GSM4909253
+2025-07-29 00:12:46,656 - INFO - Loading configuration from configs/gnn_ae_config.yaml
+2025-07-29 00:12:46,657 - INFO - Starting training for gnn_ae on data/GSM4909253
+2025-07-29 00:16:50,856 - INFO - Training completed successfully
+2025-07-29 00:19:12,868 - INFO - Loading configuration from configs/ddpm_config.yaml
+2025-07-29 00:19:12,870 - INFO - Starting training for ddpm on data/GSM4909253
+2025-07-29 00:34:52,792 - INFO - Loading configuration from configs/ddpm_config.yaml
+2025-07-29 00:34:52,793 - INFO - Starting training for ddpm on data/GSM4909253
+2025-07-29 00:55:28,532 - INFO - Loading configuration from configs/ddpm_config.yaml
+2025-07-29 00:55:28,533 - INFO - Starting training for ddpm on data/GSM4909253
+2025-07-29 00:55:28,533 - INFO - Loaded config: {'model': 'ddpm', 'input_dim': 3000, 'num_timesteps': 1000, 'beta_schedule': 'linear', 'beta_start': 0.0001, 'beta_end': 0.02, 'unet_model_channels': 64, 'unet_time_emb_dim': 64, 'unet_dropout': 0.1, 'detection_timestep': 500, 'device': 'cuda', 'detection_threshold': 0.95, 'batch_size': 10000, 'k_neighbors': 5, 'train_batch_size': 16, 'epochs': 100, 'learning_rate': 0.001, 'patience': 20}
+2025-07-29 00:55:28,533 - INFO - Preprocessing data from data/GSM4909253
+2025-07-29 00:58:52,809 - INFO - Initializing ddpm model
+2025-07-29 01:05:43,035 - INFO - Loading configuration from configs/ddpm_config.yaml
+2025-07-29 01:05:43,036 - INFO - Starting training for ddpm on data/GSM4909253
+2025-07-29 01:05:43,036 - INFO - Loaded config: {'model': 'ddpm', 'input_dim': 3000, 'num_timesteps': 1000, 'beta_schedule': 'linear', 'beta_start': 0.0001, 'beta_end': 0.02, 'unet_model_channels': 64, 'unet_time_emb_dim': 64, 'unet_dropout': 0.1, 'detection_timestep': 500, 'device': 'cuda', 'detection_threshold': 0.95, 'batch_size': 10000, 'k_neighbors': 5, 'train_batch_size': 16, 'epochs': 100, 'learning_rate': 0.001, 'patience': 20}
+2025-07-29 01:05:43,036 - INFO - Preprocessing data from data/GSM4909253
+2025-07-29 01:09:11,391 - INFO - Initializing ddpm model
+2025-07-29 01:10:25,886 - INFO - Model saved to weights/ddpm_noise.pt
+2025-07-29 01:10:25,886 - INFO - Training completed successfully

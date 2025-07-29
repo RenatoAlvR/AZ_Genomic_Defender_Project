@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from pathlib import Path
 from tqdm import tqdm
 
@@ -193,7 +193,7 @@ class DenoisingDiffusionPM(nn.Module):
             num_batches = 0
 
             for batch_data in tqdm(data_loader, desc=f"Epoch {epoch} Training"):
-                x = batch_data if isinstance(batch_data, torch.Tensor) else batch_data['x']
+                x = batch_data[0]
                 x = x.to(self.config['device'])
 
                 optimizer.zero_grad()

@@ -12,7 +12,7 @@ device: cuda
 detection_threshold: 0.95
 batch_size: 10000  # Preprocessing batch size
 k_neighbors: 5      # For GNN-AE (unused for DDPM)
-train_batch_size: 32  # Training batch size
+train_batch_size: 16  # Training batch size
 epochs: 100
 learning_rate: 0.001
 patience: 20

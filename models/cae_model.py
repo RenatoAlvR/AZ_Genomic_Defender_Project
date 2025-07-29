@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from typing import Dict, Any
+from tqdm import tqdm
+from pathlib import Path
 
 class ContrastiveAutoencoder(nn.Module):
     """Contrastive Autoencoder for detecting synthetic cell injections in scRNA-seq data."""
@@ -90,8 +92,9 @@ class ContrastiveAutoencoder(nn.Module):
         # Xavier initialization
         for layer in head:
             if isinstance(layer, nn.Linear):
-                nn.init.xavier_normal_(layer.weight, gain=nn.init.calculate_gain('silu'))
-                nn.init.zeros_(layer.bias)
+                nn.init.xavier_normal_(layer.weight, gain=nn.init.calculate_gain('relu'))
+                if layer.bias is not None:
+                    nn.init.zeros_(layer.bias)
         return head
 
     def contrastive_loss(self, projections, positive_pairs, negative_pairs):
@@ -150,6 +153,55 @@ class ContrastiveAutoencoder(nn.Module):
         cont_loss = self.contrastive_loss(outputs['proj'], positive_pairs, negative_pairs)
         return self.alpha * cont_loss + self.beta * recon_loss
 
+    def fit(self, data_loader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer, epochs: int, patience: int = 20):
+        """
+        Train the CAE model using reconstruction and contrastive losses.
+
+        Args:
+            data_loader: DataLoader with PCA-reduced scRNA-seq data (shape: [batch_size, input_dim])
+            optimizer: Optimizer for training (e.g., Adam)
+            epochs: Number of training epochs
+            patience: Number of epochs to wait for early stopping
+        """
+        self.train()
+        best_loss = float('inf')
+        no_improve = 0
+
+        for epoch in range(epochs):
+            total_loss = 0.0
+            num_batches = 0
+
+            for batch_data in tqdm(data_loader, desc=f"Epoch {epoch} Training"):
+                x = batch_data.to(self.device)
+                batch_size = x.shape[0]
+
+                # Generate positive and negative pairs
+                noise = torch.randn_like(x) * 0.1  # Small noise for positive pairs
+                x_pos = x + noise
+                positive_pairs = torch.stack([torch.arange(batch_size), torch.arange(batch_size)], dim=1).to(self.device)
+                negative_pairs = torch.combinations(torch.arange(batch_size), r=2).to(self.device)
+
+                optimizer.zero_grad()
+                loss = self.compute_loss(x, positive_pairs, negative_pairs)
+                loss.backward()
+                optimizer.step()
+
+                total_loss += loss.item()
+                num_batches += 1
+
+            avg_loss = total_loss / num_batches
+            print(f"Epoch {epoch}: Avg Train Loss: {avg_loss:.4f} (Recon: {self.beta * F.mse_loss(self(x)['recon'], x).item():.4f}, Contrastive: {self.alpha * self.contrastive_loss(self(x)['proj'], positive_pairs, negative_pairs).item():.4f})")
+
+            # Early stopping
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                no_improve = 0
+            else:
+                no_improve += 1
+                if no_improve >= patience:
+                    print(f"Early stopping triggered after {epoch + 1} epochs.")
+                    break
+
     def detect(self, X: np.ndarray) -> np.ndarray:
         """
         Detect synthetic cells by computing anomaly scores.
@@ -178,6 +230,7 @@ class ContrastiveAutoencoder(nn.Module):
         Args:
             path: File path to save the model (e.g., 'cae_synthetic.pt')
         """
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
         torch.save({
             'state_dict': self.state_dict(),
             'config': self.config,
@@ -187,6 +240,7 @@ class ContrastiveAutoencoder(nn.Module):
                 'latent_dim': self.encoder[-1].out_features
             }
         }, path)
+        print(f"CAE model saved to {path}")
 
     @classmethod
     def load(cls, path: str, device: str = None):
@@ -200,7 +254,10 @@ class ContrastiveAutoencoder(nn.Module):
         Returns:
             Loaded model instance
         """
-        checkpoint = torch.load(path, map_location=device)
+        map_location = device if device else ('cuda' if torch.cuda.is_available() else 'cpu')
+        checkpoint = torch.load(path, map_location=map_location)
         model = cls(checkpoint.get('config'))
         model.load_state_dict(checkpoint['state_dict'])
+        model.to(map_location)
+        print(f"CAE model loaded from {path} to device {map_location}")
         return model

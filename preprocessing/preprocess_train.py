@@ -32,7 +32,7 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
     assert k_neighbors > 0, "k_neighbors must be positive"
 
     # Load 10x Genomics data
-    adata = sc.read_10x_mtx(data_dir, var_names='gene_symbols', cache=True)
+    adata = sc.read_10x_mtx(data_dir, var_names='gene_symbols', cache=False)
 
     # Process in batches if dataset is large
     n_cells = adata.n_obs
