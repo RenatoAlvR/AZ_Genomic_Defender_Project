@@ -37,3 +37,11 @@
 2025-07-29 01:09:11,391 - INFO - Initializing ddpm model
 2025-07-29 01:10:25,886 - INFO - Model saved to weights/ddpm_noise.pt
 2025-07-29 01:10:25,886 - INFO - Training completed successfully
+2025-07-31 20:27:23,754 - INFO - Loading configuration from configs/cae_config.yaml
+2025-07-31 20:27:23,756 - INFO - Starting detection for cae on data/GSM4909253 using weights weights/cae_synthetic_cells.pt
+2025-07-31 20:27:23,756 - INFO - Loaded config: {'model': 'cae', 'input_dim': 3000, 'hidden_dim': 512, 'latent_dim': 128, 'temperature': 0.5, 'dropout': 0.2, 'device': 'cuda', 'alpha': 0.7, 'beta': 0.3, 'detection_threshold': 0.95, 'batch_size': 10000, 'k_neighbors': 5, 'train_batch_size': 32, 'epochs': 100, 'learning_rate': 0.001, 'patience': 20}
+2025-07-31 20:27:23,756 - INFO - Preprocessing data from data/GSM4909253
+2025-07-31 20:30:42,765 - INFO - Detecting anomalies with cae
+2025-07-31 20:30:42,874 - INFO - Detection completed, 5.01% of the dataset could be poisoned, suspected cells: [7, 38, 49, 63, 108, 109, 112, 171, 175, 241]...
+2025-07-31 20:30:42,880 - INFO - Anomaly scores saved to results/cae_anomalies.csv
+2025-07-31 20:30:42,881 - INFO - Detection completed successfully
