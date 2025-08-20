@@ -1,8 +1,10 @@
 import scanpy as sc
 import torch
 import numpy as np
+from torch.utils.data import TensorDataset, DataLoader
 from torch_geometric.data import Data
 from torch_geometric.nn import knn_graph
+from sklearn.neighbors import kneighbors_graph
 from pathlib import Path
 from typing import Dict, Any, Union
 
@@ -33,6 +35,23 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
 
     # Load 10x Genomics data
     adata = sc.read_10x_mtx(data_dir, var_names='gene_symbols', cache=False)
+    print(f"Initial AnnData shape: {adata.shape}")
+
+    # Check if dimensions are transposed (genes as obs, cells as vars)
+    expected_cells = 69032  # From barcodes.tsv.gz
+    expected_genes = 33538  # From features.tsv.gz
+    if adata.shape == (expected_genes, expected_cells):
+        print("Transposing AnnData to correct shape (cells × genes)")
+        adata.X = adata.X.T
+        # Swap obs and var
+        obs_names = adata.var_names
+        var_names = adata.obs_names
+        adata.obs_names = adata.obs_names
+        adata.var_names = var_names
+        # Update obs and var to avoid empty DataFrames
+        adata.obs = adata.obs.reindex(adata.obs_names)
+        adata.var = adata.var.reindex(adata.var_names)
+        print(f"Corrected AnnData shape: {adata.shape}")
 
     # Process in batches if dataset is large
     n_cells = adata.n_obs
@@ -54,12 +73,20 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
 
     # Combine batches
     X = np.concatenate(processed_data, axis=0)
+    
+    # Convert to PyTorch tensor
+    X_torch = torch.tensor(X, dtype=torch.float32)
 
     if model == 'gnn_ae':
-        # Convert to torch tensor for graph construction
-        X_torch = torch.tensor(X, dtype=torch.float32)
         # Construct k-NN graph
         edge_index = knn_graph(X_torch, k=k_neighbors, loop=False)
         return Data(x=X_torch, edge_index=edge_index)
     
-    return X
+    # Create DataLoader for other models
+    dataset = TensorDataset(X_torch)
+    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True, collate_fn=lambda x: x[0])
+    
+    print(f"DataLoader batch example: {next(iter(data_loader))}")
+
+    return data_loader
+    

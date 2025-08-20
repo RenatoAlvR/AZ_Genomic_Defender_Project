@@ -1,8 +1,10 @@
+
 import torch
 import yaml
 from pathlib import Path
 from typing import Dict, Any, Union
 from torch.utils.data import TensorDataset, DataLoader
+from torch_geometric.data import Data
 import numpy as np
 import logging
 
@@ -24,22 +26,24 @@ def train(config_path: str, dataset_path: str, model_name: str, output_path: str
     logging.info(f"Preprocessing data from {dataset_path}")
     data = preprocess_train(dataset_path, config)
     
-    # Convert to tensor for DataLoader
-    if model_name == 'gnn_ae':
+    # Handle data based on model type
+    if model_type == 'gnn_ae':
         # GNN-AE expects a Data object with x, edge_index
-        x = torch.tensor(data.x, dtype=torch.float32)
-        edge_index = data.edge_index
-        dataset = TensorDataset(x)  # edge_index handled separately in GNN-AE
+        if not isinstance(data, Data):
+            raise ValueError(f"Expected torch_geometric.data.Data for gnn_ae, got {type(data)}")
+        # Create a DataLoader for the single Data object (batch_size=1 for GNN)
+        data_loader = DataLoader([data], batch_size=1, shuffle=False)
     else:
-        # Other models expect a numpy array of shape (n_cells, input_dim)
-        data_tensor = torch.tensor(data, dtype=torch.float32)
-        dataset = TensorDataset(data_tensor)
+        # Other models (e.g., CAE, VAE, DDPM) expect a DataLoader
+        if not isinstance(data, DataLoader):
+            raise ValueError(f"Expected DataLoader for {model_type}, got {type(data)}")
+        data_loader = data
     
-    # Create DataLoader with train_batch_size from config
-    batch_size = config.get('train_batch_size', 32)
-    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+    #Verify data loader output
+    batch_example = next(iter(data_loader))
+    print(f"DataLoader batch example: {batch_example}, type: {type(batch_example)}")
     
-    # Initialize model
+    #Initialize model
     logging.info(f"Initializing {model_name} model")
     if incremental and Path(output_path).exists():
         logging.info(f"Loading pre-trained weights from {output_path}")
