@@ -8,6 +8,7 @@ unet_model_channels: 64
 unet_time_emb_dim: 64
 unet_dropout: 0.1
 detection_timestep: 500
+generation_timestep: 200
 device: cuda
 detection_threshold: 0.95
 batch_size: 10000  # Preprocessing batch size

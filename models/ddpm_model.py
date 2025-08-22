@@ -83,6 +83,7 @@ class DenoisingDiffusionPM(nn.Module):
             'unet_time_emb_dim': 64,
             'unet_dropout': 0.1,
             'detection_timestep': 500,  # Timestep for detection
+            'generation_timestep': 0,   #Timestep to stop generation (0 for clean data)
             'device': 'cuda' if torch.cuda.is_available() else 'cpu'
         }
         self.config = {**default_config, **(config or {})}
@@ -104,7 +105,7 @@ class DenoisingDiffusionPM(nn.Module):
 
     def _validate_config(self):
         required_keys = {'input_dim', 'num_timesteps', 'beta_schedule', 'beta_start', 'beta_end', 
-                         'unet_model_channels', 'unet_time_emb_dim', 'unet_dropout', 'detection_timestep', 'device'}
+                         'unet_model_channels', 'unet_time_emb_dim', 'unet_dropout', 'detection_timestep', 'generation_timestep', 'device'}
         assert required_keys.issubset(self.config.keys()), \
             f"Missing required config keys: {required_keys - set(self.config.keys())}"
 
@@ -123,6 +124,8 @@ class DenoisingDiffusionPM(nn.Module):
         assert 0 <= self.config['unet_dropout'] < 1, "unet_dropout must be in [0, 1)"
         assert isinstance(self.config['detection_timestep'], int) and 0 < self.config['detection_timestep'] < self.config['num_timesteps'], \
             f"detection_timestep must be between 0 and {self.config['num_timesteps']}"
+        assert isinstance(self.config['generation_timestep'], int) and 0 <= self.config['generation_timestep'] \
+                <= self.config['num_timesteps'], f"generation_timestep must be between 0 and {self.config['num_timesteps']}"
         assert self.config['device'] in ['cpu', 'cuda'], "device must be 'cpu' or 'cuda'"
 
     def _setup_noise_schedule(self):
@@ -181,6 +184,52 @@ class DenoisingDiffusionPM(nn.Module):
         x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
         predicted_noise = self.model(x_t, t)
         return F.mse_loss(predicted_noise, noise)
+
+    def generate(self, num_samples: int, poison_factor: float = 0.0, seed: Optional[int] = None) -> torch.Tensor:
+        """Generate simulated poisoned genomic data using reverse diffusion process.
+        
+        Args:
+            num_samples (int): Number of samples to generate.
+            poison_factor (float): Controls poisoning intensity (0.0 for clean, 1.0 for fully noisy).
+            seed (Optional[int]): Random seed for reproducibility.
+        
+        Returns:
+            torch.Tensor: Generated samples of shape (num_samples, input_dim).
+        """
+        if seed is not None:
+            torch.manual_seed(seed)
+        
+        self.eval()
+        shape = (num_samples, self.config['input_dim'])
+        x_t = torch.randn(shape, device=self.config['device'])
+        start_timestep = self.num_timesteps - 1
+        end_timestep = int(self.generation_timestep * (1 - poison_factor))
+        
+        with torch.no_grad():
+            for t in range(start_timestep, end_timestep - 1, -1):
+                t_tensor = torch.full((num_samples,), t, device=self.config['device'], dtype=torch.long)
+                predicted_noise = self.model(x_t, t_tensor)
+                alpha_t = self._extract(self.alphas, t_tensor, x_t.shape)
+                alpha_cumprod_t = self._extract(self.alphas_cumprod, t_tensor, x_t.shape)
+                beta_t = self._extract(self.betas, t_tensor, x_t.shape)
+                
+                # Reverse diffusion step
+                x_t = (1 / torch.sqrt(alpha_t)) * (
+                    x_t - ((1 - alpha_t) / torch.sqrt(1 - alpha_cumprod_t)) * predicted_noise
+                )
+                if t > end_timestep:
+                    x_t += torch.sqrt(beta_t) * torch.randn_like(x_t)
+        
+        # Apply additional poisoning if poison_factor > 0
+        if poison_factor > 0:
+            # Simulate biological perturbations (e.g., random gene over-expression)
+            num_perturbed_features = int(0.1 * self.config['input_dim'])  # Perturb 10% of features
+            feature_indices = torch.randperm(self.config['input_dim'])[:num_perturbed_features]
+            perturbation = torch.randn(num_samples, num_perturbed_features, device=self.config['device'])
+            perturbation = perturbation * poison_factor * 2.0  # Scale perturbation
+            x_t[:, feature_indices] += perturbation
+        
+        return x_t
 
     def fit(self, data_loader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer, epochs: int, patience: int = 20):
         """Train the DDPM model."""

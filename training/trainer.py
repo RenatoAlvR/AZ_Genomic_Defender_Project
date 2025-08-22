@@ -27,7 +27,7 @@ def train(config_path: str, dataset_path: str, model_name: str, output_path: str
     data = preprocess_train(dataset_path, config)
     
     # Handle data based on model type
-    if model_type == 'gnn_ae':
+    if model_name == 'gnn_ae':
         # GNN-AE expects a Data object with x, edge_index
         if not isinstance(data, Data):
             raise ValueError(f"Expected torch_geometric.data.Data for gnn_ae, got {type(data)}")
@@ -36,7 +36,7 @@ def train(config_path: str, dataset_path: str, model_name: str, output_path: str
     else:
         # Other models (e.g., CAE, VAE, DDPM) expect a DataLoader
         if not isinstance(data, DataLoader):
-            raise ValueError(f"Expected DataLoader for {model_type}, got {type(data)}")
+            raise ValueError(f"Expected DataLoader for {model_name}, got {type(data)}")
         data_loader = data
     
     #Verify data loader output
