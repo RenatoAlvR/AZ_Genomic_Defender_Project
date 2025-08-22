@@ -8,6 +8,47 @@ from sklearn.neighbors import kneighbors_graph
 from pathlib import Path
 from typing import Dict, Any, Union
 
+def save_and_visualize(adata: sc.AnnData, X_pca: np.ndarray, data_dir: Path, dataset_name: str):
+    """Save preprocessed PCA data and generate violin plot for gene distributions.
+    
+    Args:
+        adata (sc.AnnData): AnnData object with cell and gene names.
+        X_pca (np.ndarray): PCA-reduced data (n_cells, input_dim).
+        data_dir (Path): Original dataset directory.
+        dataset_name (str): Name of the dataset (e.g., 'end_data').
+    """
+    # Create output directory
+    output_dir = Path('preprocessing') / dataset_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save PCA data, cell names, and gene names
+    np.save(output_dir / 'data.npy', X_pca)
+    pd.Series(adata.obs_names).to_csv(output_dir / 'cells.txt', index=False, header=False)
+    pd.Series(adata.var_names[:X_pca.shape[1]]).to_csv(output_dir / 'genes.txt', index=False, header=False)
+    print(f"Saved preprocessed data to {output_dir / 'data.npy'}")
+    
+    # Generate violin plot for top 10 variable genes
+    variances = np.var(X_pca, axis=0)
+    top_genes_idx = np.argsort(variances)[-10:]
+    top_genes = adata.var_names[top_genes_idx]
+    
+    # Convert to DataFrame for visualization
+    df = pd.DataFrame(X_pca[:, top_genes_idx], columns=top_genes)
+    df_melt = df.melt(var_name='Gene', value_name='Expression')
+    
+    # Create violin plot
+    plt.figure(figsize=(12, 6))
+    sns.violinplot(x='Gene', y='Expression', data=df_melt, inner='quartile')
+    plt.title(f'Gene Expression Distributions - {dataset_name}')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    
+    # Save plot
+    plot_path = output_dir / 'gene_distributions.png'
+    plt.savefig(plot_path, dpi=300)
+    plt.close()
+    print(f"Saved gene distribution plot to {plot_path}")
+    
 def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray, Data]:
     """Preprocess 10x Genomics data for training.
 
@@ -76,6 +117,10 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
     
     # Convert to PyTorch tensor
     X_torch = torch.tensor(X, dtype=torch.float32)
+
+    # Save preprocessed data and visualize
+    dataset_name = data_dir.name
+    save_and_visualize(adata, X, data_dir, dataset_name)
 
     if model == 'gnn_ae':
         # Construct k-NN graph
