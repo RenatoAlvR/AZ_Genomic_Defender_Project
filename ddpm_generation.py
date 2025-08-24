@@ -8,13 +8,13 @@ from scanpy import AnnData
 from pathlib import Path
 
 # Load DDPM model
-model = DenoisingDiffusionPM.load('weights/ddpm_gse154826.pt')
+model = DenoisingDiffusionPM.load('weights/breast_ddpm_neoplastic.pt')
 
 # Generate data
 generated_data = model.generate(num_samples=1000, poison_factor=0.5).cpu().numpy()
 
 # Load gene names from real data
-gene_names = pd.read_csv('preprocessing/end_data/genes.txt', header=None).values.flatten()
+gene_names = pd.read_csv('preprocessing/mix_neoplastic1/genes.txt', header=None).values.flatten()
 
 # Create synthetic cell names
 cell_names = [f'SYN_CELL_{i+1}' for i in range(1000)]
@@ -27,7 +27,7 @@ adata = AnnData(
 )
 
 # Save and visualize
-output_dir = Path('preprocessing/generated')
+output_dir = Path('preprocessing/breast_neoplastic_generated')
 output_dir.mkdir(parents=True, exist_ok=True)
 np.save(output_dir / 'data.npy', adata.X)
 pd.Series(adata.obs_names).to_csv(output_dir / 'cells.txt', index=False, header=False)

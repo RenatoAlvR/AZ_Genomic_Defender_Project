@@ -99,6 +99,7 @@ class DenoisingDiffusionPM(nn.Module):
 
         self.num_timesteps = self.config['num_timesteps']
         self.detection_timestep = self.config['detection_timestep']
+        self.generation_timestep = self.config['generation_timestep']
         self._setup_noise_schedule()
 
         self.to(self.config['device'])
