@@ -131,6 +131,10 @@ class VariationalAutoencoder(nn.Module):
             num_batches = 0
 
             for batch_data in data_loader:
+                # Handle tuple or list output from DataLoader
+                if isinstance(batch_data, (tuple, list)):
+                    batch_data = batch_data[0]  # Extract the first tensor
+                
                 x = batch_data if isinstance(batch_data, torch.Tensor) else batch_data['x']
                 x = x.to(self.device)
 

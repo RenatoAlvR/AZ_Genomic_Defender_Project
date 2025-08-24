@@ -242,6 +242,10 @@ class DenoisingDiffusionPM(nn.Module):
             num_batches = 0
 
             for batch_data in tqdm(data_loader, desc=f"Epoch {epoch} Training"):
+                # Handle tuple or list output from DataLoader
+                if isinstance(batch_data, (tuple, list)):
+                    batch_data = batch_data[0]  # Extract the first tensor
+                
                 x = batch_data[0]
                 x = x.to(self.config['device'])
 
