@@ -143,8 +143,10 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
     
     # Create DataLoader for other models
     dataset = TensorDataset(X_torch)
-    data_loader = DataLoader(dataset, batch_size=train_batch_size, shuffle=True, drop_last=True, collate_fn=lambda x: x[0])
+    data_loader = DataLoader(dataset, batch_size=train_batch_size, shuffle=True, drop_last=True, collate_fn=lambda batch: torch.stack([x[0] for x in batch]))
     
-    print(f"Preprocess DataLoader batch example: {next(iter(data_loader))}")
+    # Debug DataLoader output
+    batch_example = next(iter(data_loader))
+    print(f"Preprocess DataLoader batch example: shape: {batch_example.shape}, type: {type(batch_example)}")
     return data_loader
     
