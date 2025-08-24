@@ -8,7 +8,7 @@ from scanpy import AnnData
 from pathlib import Path
 
 # Load DDPM model
-model = DenoisingDiffusionPM.load('weights/breast_ddpm_neoplastic.pt')
+model = DenoisingDiffusionPM.load('weights/breast_ddpm_neoplastic1.pt')
 
 # Generate data
 generated_data = model.generate(num_samples=1000, poison_factor=1.0).cpu().numpy()
@@ -45,4 +45,33 @@ plt.title('Gene Expression Distributions - Generated Data')
 plt.xticks(rotation=45)
 plt.tight_layout()
 plt.savefig(output_dir / 'gene_distributions.png', dpi=300)
+plt.close()
+
+# Heatmap visualization
+# Load original data from preprocessed data.npy
+X_orig = np.load('preprocessing/mix_neoplastic1/data.npy')
+# Subsample to 1000 cells for comparable heatmap
+np.random.seed(42)
+subsample_idx = np.random.choice(X_orig.shape[0], 1000, replace=False)
+X_orig_sub = X_orig[subsample_idx]
+
+# Heatmap for generated data (top 10 variable components)
+plt.figure(figsize=(12, 8))
+sns.heatmap(df, cmap='viridis', xticklabels=top_genes, yticklabels=False)
+plt.title('Generated Data: Top 10 Variable Components')
+plt.xlabel('Components')
+plt.ylabel('Cells')
+plt.tight_layout()
+plt.savefig(output_dir / 'generated_heatmap.png', dpi=300)
+plt.close()
+
+# Heatmap for original data (top 10 variable components, same indices)
+df_orig = pd.DataFrame(X_orig_sub[:, top_genes_idx], columns=top_genes)
+plt.figure(figsize=(12, 8))
+sns.heatmap(df_orig, cmap='viridis', xticklabels=top_genes, yticklabels=False)
+plt.title('Original Data: Top 10 Variable Components (Subsampled)')
+plt.xlabel('Components')
+plt.ylabel('Cells')
+plt.tight_layout()
+plt.savefig(output_dir / 'original_heatmap.png', dpi=300)
 plt.close()
