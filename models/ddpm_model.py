@@ -46,27 +46,43 @@ class ResidualBlock(nn.Module):
         return h + x
 
 class UNet1D(nn.Module):
-    """Lightweight 1D U-Net for Noise Prediction."""
-    def __init__(self, input_dim: int, model_channels: int = 64, time_emb_dim: int = 64, dropout: float = 0.1):
+    def __init__(self, input_dim: int, model_channels: int = 128, time_emb_dim: int = 128, dropout: float = 0.1):
         super().__init__()
         self.input_dim = input_dim
         self.model_channels = model_channels
         self.time_mlp = nn.Sequential(
             SinusoidalPosEmb(time_emb_dim),
             nn.Linear(time_emb_dim, time_emb_dim),
+            nn.SiLU(),
+            nn.Linear(time_emb_dim, time_emb_dim),
             nn.SiLU()
         )
         self.init_conv = nn.Conv1d(1, model_channels, kernel_size=3, padding=1)
-        self.res_block = ResidualBlock(model_channels, time_emb_dim, dropout)
+        self.down_blocks = nn.ModuleList([
+            ResidualBlock(model_channels, time_emb_dim, dropout),
+            ResidualBlock(model_channels, time_emb_dim, dropout)
+        ])
+        self.mid_block = ResidualBlock(model_channels, time_emb_dim, dropout)
+        self.up_blocks = nn.ModuleList([
+            ResidualBlock(model_channels, time_emb_dim, dropout),
+            ResidualBlock(model_channels, time_emb_dim, dropout)
+        ])
         self.final_conv = nn.Conv1d(model_channels, 1, kernel_size=3, padding=1)
 
     def forward(self, x: torch.Tensor, time: torch.Tensor) -> torch.Tensor:
-        x = x.unsqueeze(1)  # (B, Features) -> (B, 1, Features)
+        if x.dim() == 2:
+            x = x.unsqueeze(1)
+        elif x.dim() != 3 or x.size(1) != 1:
+            raise ValueError(f"Expected input shape [batch_size, 1, {self.input_dim}], got {x.shape}")
         t_emb = self.time_mlp(time)
         h = self.init_conv(x)
-        h = self.res_block(h, t_emb)
+        for block in self.down_blocks:
+            h = block(h, t_emb)
+        h = self.mid_block(h, t_emb)
+        for block in self.up_blocks:
+            h = block(h, t_emb)
         out = self.final_conv(h)
-        return out.squeeze(1)  # (B, 1, Features) -> (B, Features)
+        return out.squeeze(1)
 
 class DenoisingDiffusionPM(nn.Module):
     """Denoising Diffusion Probabilistic Model for detecting injected biological noise."""
@@ -153,6 +169,7 @@ class DenoisingDiffusionPM(nn.Module):
         sqrt_recipm1_alphas_cumprod = torch.sqrt(1. / alphas_cumprod - 1)
 
         self.register_buffer('betas', betas)
+        self.register_buffer('alphas', alphas)  # Added for generate
         self.register_buffer('alphas_cumprod', alphas_cumprod)
         self.register_buffer('sqrt_alphas_cumprod', sqrt_alphas_cumprod)
         self.register_buffer('sqrt_one_minus_alphas_cumprod', sqrt_one_minus_alphas_cumprod)

@@ -11,7 +11,7 @@ from pathlib import Path
 model = DenoisingDiffusionPM.load('weights/breast_ddpm_neoplastic.pt')
 
 # Generate data
-generated_data = model.generate(num_samples=1000, poison_factor=0.5).cpu().numpy()
+generated_data = model.generate(num_samples=1000, poison_factor=1.0).cpu().numpy()
 
 # Load gene names from real data
 gene_names = pd.read_csv('preprocessing/mix_neoplastic1/genes.txt', header=None).values.flatten()
