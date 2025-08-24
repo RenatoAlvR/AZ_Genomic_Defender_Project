@@ -246,8 +246,7 @@ class DenoisingDiffusionPM(nn.Module):
                 if isinstance(batch_data, (tuple, list)):
                     batch_data = batch_data[0]  # Extract the first tensor
                 
-                x = batch_data[0]
-                x = x.to(self.config['device'])
+                x = batch_data.to(self.config['device'])  # Use batch_data
 
                 optimizer.zero_grad()
                 loss = self.compute_loss(x)
