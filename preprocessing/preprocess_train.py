@@ -68,6 +68,7 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
     input_dim = config.get('input_dim', 3000)
     batch_size = config.get('batch_size', 10000)  # For memory-efficient processing
     k_neighbors = config.get('k_neighbors', 5)  # For GNN-AE graph construction
+    train_batch_size = config.get('train_batch_size', 32)  # For DataLoader
 
     # Validate inputs
     data_dir = Path(data_dir)
@@ -77,53 +78,63 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
     assert batch_size > 0, "batch_size must be positive"
     assert k_neighbors > 0, "k_neighbors must be positive"
 
-    # Load 10x Genomics data
-    adata = sc.read_10x_mtx(data_dir, var_names='gene_symbols', cache=False)
-    print(f"Initial AnnData shape: {adata.shape}")
+    # Check for preprocessed data
+    dataset_name = data_dir.name
+    output_dir = Path('preprocessing') / dataset_name
+    data_path = output_dir / 'data.npy'
 
-    # Check if dimensions are transposed (genes as obs, cells as vars)
-    expected_cells = 69032  # From barcodes.tsv.gz
-    expected_genes = 33538  # From features.tsv.gz
-    if adata.shape == (expected_genes, expected_cells):
-        print("Transposing AnnData to correct shape (cells × genes)")
-        adata.X = adata.X.T
-        # Swap obs and var
-        obs_names = adata.var_names
-        var_names = adata.obs_names
-        adata.obs_names = adata.obs_names
-        adata.var_names = var_names
-        # Update obs and var to avoid empty DataFrames
-        adata.obs = adata.obs.reindex(adata.obs_names)
-        adata.var = adata.var.reindex(adata.var_names)
-        print(f"Corrected AnnData shape: {adata.shape}")
+    if data_path.exists():
+        print(f"Loading preprocessed data from {data_path}")
+        X = np.load(data_path)
+        # Verify shape matches expected input_dim
+        if X.shape[1] != input_dim:
+            raise ValueError(f"Loaded data has {X.shape[1]} features, expected {input_dim}")
 
-    # Process in batches if dataset is large
-    n_cells = adata.n_obs
-    batch_size = min(batch_size, n_cells)
-    processed_data = []
+    else:
+        # Load 10x Genomics data
+        adata = sc.read_10x_mtx(data_dir, var_names='gene_symbols', cache=False)
+        print(f"Initial AnnData shape: {adata.shape}")
 
-    for start in range(0, n_cells, batch_size):
-        end = min(start + batch_size, n_cells)
-        batch = adata[start:end].copy()
+        # Check if dimensions are transposed (genes as obs, cells as vars)
+        expected_cells = 69032  # From barcodes.tsv.gz
+        expected_genes = 33538  # From features.tsv.gz
+        if adata.shape == (expected_genes, expected_cells):
+            print("Transposing AnnData to correct shape (cells × genes)")
+            adata.X = adata.X.T
+            obs_names = adata.var_names
+            var_names = adata.obs_names
+            adata.obs_names = obs_names
+            adata.var_names = var_names
+            adata.obs = adata.obs.reindex(adata.obs_names)
+            adata.var = adata.var.reindex(adata.var_names)
+            print(f"Corrected AnnData shape: {adata.shape}")
 
-        # Preprocessing steps
-        sc.pp.normalize_total(batch, target_sum=1e4)
-        sc.pp.log1p(batch)
-        sc.pp.pca(batch, n_comps=input_dim, svd_solver='arpack')
+        # Process in batches if dataset is large
+        n_cells = adata.n_obs
+        batch_size = min(batch_size, n_cells)
+        processed_data = []
 
-        # Extract PCA features
-        batch_data = batch.obsm['X_pca']
-        processed_data.append(batch_data)
+        for start in range(0, n_cells, batch_size):
+            end = min(start + batch_size, n_cells)
+            batch = adata[start:end].copy()
 
-    # Combine batches
-    X = np.concatenate(processed_data, axis=0)
+            # Preprocessing steps
+            sc.pp.normalize_total(batch, target_sum=1e4)
+            sc.pp.log1p(batch)
+            sc.pp.pca(batch, n_comps=input_dim, svd_solver='arpack')
+
+            # Extract PCA features
+            batch_data = batch.obsm['X_pca']
+            processed_data.append(batch_data)
+
+        # Combine batches
+        X = np.concatenate(processed_data, axis=0)
+        
+        # Save preprocessed data and visualize
+        save_and_visualize(adata, X, data_dir, dataset_name)
     
     # Convert to PyTorch tensor
     X_torch = torch.tensor(X, dtype=torch.float32)
-
-    # Save preprocessed data and visualize
-    dataset_name = data_dir.name
-    save_and_visualize(adata, X, data_dir, dataset_name)
 
     if model == 'gnn_ae':
         # Construct k-NN graph
@@ -132,9 +143,8 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
     
     # Create DataLoader for other models
     dataset = TensorDataset(X_torch)
-    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True, collate_fn=lambda x: x[0])
+    data_loader = DataLoader(dataset, batch_size=train_batch_size, shuffle=True, drop_last=True, collate_fn=lambda x: x[0])
     
-    print(f"DataLoader batch example: {next(iter(data_loader))}")
-
+    print(f"Preprocess DataLoader batch example: {next(iter(data_loader))}")
     return data_loader
     
