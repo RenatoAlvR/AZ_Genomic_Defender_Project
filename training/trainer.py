@@ -28,6 +28,7 @@ def train(config_path: str, dataset_path: str, model_name: str, output_path: str
     
     # Handle data based on model type
     if model_name == 'gnn_ae':
+        print(f"Entered GNN if of trainer file")
         # GNN-AE expects a Data object with x, edge_index
         if not isinstance(data, Data):
             raise ValueError(f"Expected torch_geometric.data.Data for gnn_ae, got {type(data)}")
