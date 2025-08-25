@@ -103,31 +103,32 @@ class GNNAutoencoder(nn.Module):
         recon_loss = F.mse_loss(outputs['recon'], x, reduction='sum') / x.size(0)
         return self.loss_weight_recon * recon_loss
 
-    def fit(self, graph_data, optimizer: torch.optim.Optimizer, epochs: int, patience: int = 20):
+    def fit(self, data_loader, optimizer: torch.optim.Optimizer, epochs: int, patience: int = 20):
         """Train the GNN-AE model."""
         self.train()
         best_loss = float('inf')
         no_improve = 0
 
-        x = graph_data.x.to(self.device)
-        edge_index = graph_data.edge_index.to(self.device)
-
         for epoch in range(epochs):
-            optimizer.zero_grad()
-            total_loss = self.compute_loss(x, edge_index)
-            total_loss.backward()
-            optimizer.step()
+            for graph_data in data_loader:  # Iterate over DataLoader to get Data object
+                x = graph_data.x.to(self.device)
+                edge_index = graph_data.edge_index.to(self.device)
 
-            print(f"Epoch {epoch}: Loss {total_loss.item():.4f}")
+                optimizer.zero_grad()
+                total_loss = self.compute_loss(x, edge_index)
+                total_loss.backward()
+                optimizer.step()
 
-            if total_loss < best_loss:
-                best_loss = total_loss.item()
-                no_improve = 0
-            else:
-                no_improve += 1
-                if no_improve >= patience:
-                    print(f"Early stopping triggered after {epoch + 1} epochs.")
-                    break
+                print(f"Epoch {epoch}: Loss {total_loss.item():.4f}")
+
+                if total_loss < best_loss:
+                    best_loss = total_loss.item()
+                    no_improve = 0
+                else:
+                    no_improve += 1
+                    if no_improve >= patience:
+                        print(f"Early stopping triggered after {epoch + 1} epochs.")
+                        break
 
     def detect(self, graph_data) -> np.ndarray:
         """Detect label flips using reconstruction errors."""

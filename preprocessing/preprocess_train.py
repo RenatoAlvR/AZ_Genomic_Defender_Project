@@ -1,4 +1,5 @@
 import time
+import os
 import scanpy as sc
 import torch
 import numpy as np
@@ -66,6 +67,7 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
     """
     # Extract config parameters
     model = config.get('model', '').lower()
+    device = config.get('device', 'cpu')
     input_dim = config.get('input_dim', 3000)
     batch_size = config.get('batch_size', 10000)  # For memory-efficient processing
     k_neighbors = config.get('k_neighbors', 5)  # For GNN-AE graph construction
@@ -78,11 +80,13 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
     assert input_dim > 0, "input_dim must be positive"
     assert batch_size > 0, "batch_size must be positive"
     assert k_neighbors > 0, "k_neighbors must be positive"
+    assert device in ['cpu', 'cuda'], f"No device available"
 
     # Check for preprocessed data
     dataset_name = data_dir.name
     output_dir = Path('preprocessing') / dataset_name
     data_path = output_dir / 'data.npy'
+    graph_path = output_dir / 'edge_index.pt'
 
     if data_path.exists():
         print(f"Loading preprocessed data from {data_path}")
@@ -138,19 +142,28 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
     X_torch = torch.tensor(X, dtype=torch.float32)
 
     if model == 'gnn_ae':
-        # Construct k-NN graph
-        print(f"Constructing k-NN graph... (could take a lot of time)")
-        start_time = time.time()
+        if graph_path.exists():
+            edge_index = torch.load(graph_path)
+            return Data(x=X_torch, edge_index=edge_index)
+        else:
+            # Construct k-NN graph
+            print(f"Constructing k-NN graph... (could take a lot of time)")
+            start_time = time.time()
 
-        #edge_index = knn_graph(X_torch, k=k_neighbors, loop=False, num_workers= 15)
-        
-        # Use GPU to process the graph (caution with VRAM)
-        X_torch = X_torch.to('cuda')
-        edge_index = knn_graph(X_torch, k=k_neighbors, loop=False)  # No num_workers needed on GPU
-        X_torch = X_torch.cpu()
+            if(device == 'cuda' and torch.cuda.is_available()):
+                # Use GPU to process the graph (caution with VRAM)
+                print(f"Using GPU for graph construction")
+                X_torch = X_torch.to('cuda')
+                edge_index = knn_graph(X_torch, k=k_neighbors, loop=False)  # No num_workers needed on GPU
+                X_torch = X_torch.cpu()
+                edge_index = edge_index.to('cpu')
+            else:
+                num_cores = os.cpu_count()
+                edge_index = knn_graph(X_torch, k=k_neighbors, loop=False, num_workers= num_cores)
 
-        print(f"knn_graph took {time.time() - start_time:.2f} seconds")
-        return Data(x=X_torch, edge_index=edge_index)
+            torch.save(edge_index, graph_path)
+            print(f"knn_graph took {time.time() - start_time:.2f} seconds")
+            return Data(x=X_torch, edge_index=edge_index)
     
     # Create DataLoader for other models
     dataset = TensorDataset(X_torch)
