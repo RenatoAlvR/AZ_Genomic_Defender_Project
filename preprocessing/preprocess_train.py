@@ -140,7 +140,7 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
         # Construct k-NN graph
         print(f"Entered GNN if")
         edge_index = knn_graph(X_torch, k=k_neighbors, loop=False)
-        print(f"Generateed edge_index")
+        print(f"Generated edge_index")
         return Data(x=X_torch, edge_index=edge_index)
     
     # Create DataLoader for other models

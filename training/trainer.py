@@ -33,7 +33,7 @@ def train(config_path: str, dataset_path: str, model_name: str, output_path: str
         if not isinstance(data, Data):
             raise ValueError(f"Expected torch_geometric.data.Data for gnn_ae, got {type(data)}")
         # Create a DataLoader for the single Data object (batch_size=1 for GNN)
-        data_loader = DataLoader([data], batch_size=1, shuffle=False)
+        data_loader = DataLoader([data], batch_size=1, shuffle=False, collate_fn=lambda x: x[0])
     else:
         # Other models (e.g., CAE, VAE, DDPM) expect a DataLoader
         if not isinstance(data, DataLoader):
