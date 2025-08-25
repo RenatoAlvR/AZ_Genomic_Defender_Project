@@ -11,7 +11,7 @@ from pathlib import Path
 model = DenoisingDiffusionPM.load('weights/breast_ddpm_neoplastic1.pt')
 
 # Generate data
-generated_data = model.generate(num_samples=1000, poison_factor=1.0).cpu().numpy()
+generated_data = model.generate(num_samples=1000, poison_factor=0.0).cpu().numpy()
 
 # Load gene names from real data
 gene_names = pd.read_csv('preprocessing/mix_neoplastic1/genes.txt', header=None).values.flatten()
@@ -27,7 +27,7 @@ adata = AnnData(
 )
 
 # Save and visualize
-output_dir = Path('preprocessing/breast_neoplastic_generated')
+output_dir = Path('preprocessing/breast_neoplastic_generated00')
 output_dir.mkdir(parents=True, exist_ok=True)
 np.save(output_dir / 'data.npy', adata.X)
 pd.Series(adata.obs_names).to_csv(output_dir / 'cells.txt', index=False, header=False)
@@ -47,6 +47,7 @@ plt.tight_layout()
 plt.savefig(output_dir / 'gene_distributions.png', dpi=300)
 plt.close()
 
+'''
 # Heatmap visualization
 # Load original data from preprocessed data.npy
 X_orig = np.load('preprocessing/mix_neoplastic1/data.npy')
@@ -54,6 +55,7 @@ X_orig = np.load('preprocessing/mix_neoplastic1/data.npy')
 np.random.seed(42)
 subsample_idx = np.random.choice(X_orig.shape[0], 1000, replace=False)
 X_orig_sub = X_orig[subsample_idx]
+'''
 
 # Heatmap for generated data (top 10 variable components)
 plt.figure(figsize=(12, 8))
@@ -65,6 +67,7 @@ plt.tight_layout()
 plt.savefig(output_dir / 'generated_heatmap.png', dpi=300)
 plt.close()
 
+'''
 # Heatmap for original data (top 10 variable components, same indices)
 df_orig = pd.DataFrame(X_orig_sub[:, top_genes_idx], columns=top_genes)
 plt.figure(figsize=(12, 8))
@@ -75,3 +78,4 @@ plt.ylabel('Cells')
 plt.tight_layout()
 plt.savefig(output_dir / 'original_heatmap.png', dpi=300)
 plt.close()
+'''
