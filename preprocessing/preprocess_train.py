@@ -1,3 +1,4 @@
+import time
 import scanpy as sc
 import torch
 import numpy as np
@@ -138,9 +139,17 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
 
     if model == 'gnn_ae':
         # Construct k-NN graph
-        print(f"Entered GNN if")
-        edge_index = knn_graph(X_torch, k=k_neighbors, loop=False)
-        print(f"Generated edge_index")
+        print(f"Constructing k-NN graph... (could take a lot of time)")
+        start_time = time.time()
+
+        #edge_index = knn_graph(X_torch, k=k_neighbors, loop=False, num_workers= 15)
+        
+        # Use GPU to process the graph (caution with VRAM)
+        X_torch = X_torch.to('cuda')
+        edge_index = knn_graph(X_torch, k=k_neighbors, loop=False)  # No num_workers needed on GPU
+        X_torch = X_torch.cpu()
+
+        print(f"knn_graph took {time.time() - start_time:.2f} seconds")
         return Data(x=X_torch, edge_index=edge_index)
     
     # Create DataLoader for other models

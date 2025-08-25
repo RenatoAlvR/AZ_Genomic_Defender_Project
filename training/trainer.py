@@ -77,7 +77,7 @@ def train(config_path: str, dataset_path: str, model_name: str, output_path: str
     print(f"Training {'incrementally' if incremental else 'from scratch'} with {model_name.upper()} on {dataset_path}")
     if model_name == 'gnn_ae':
         # Pass edge_index for GNN-AE
-        model.fit(data_loader, optimizer, epochs=config.get('epochs', 100), patience=config.get('patience', 20), edge_index=edge_index)
+        model.fit(data_loader, optimizer, epochs=config.get('epochs', 100), patience=config.get('patience', 20))
     else:
         model.fit(data_loader, optimizer, epochs=config.get('epochs', 100), patience=config.get('patience', 20))
     
