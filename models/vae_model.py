@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import numpy as np
 from typing import Dict, Any, Tuple, Optional
 from pathlib import Path
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 class VariationalAutoencoder(nn.Module):
     """Variational Autoencoder for detecting gene scaling attacks in scRNA-seq data."""
@@ -61,9 +63,10 @@ class VariationalAutoencoder(nn.Module):
 
         assert 'recon' in self.loss_weights and 'kl' in self.loss_weights, \
             "loss_weights must include 'recon' and 'kl'"
-        assert all(0 <= v <= 1 for v in self.loss_weights.values()), "Loss weights must be in [0, 1]"
-        assert abs(sum(self.loss_weights.values()) - 1.0) < 1e-5, \
-            f"Loss weights sum to {sum(self.loss_weights.values()):.4f}, must sum to 1.0"
+        assert all(0 <= v for v in self.loss_weights.values()), "Loss weights must be non-negative"
+        # Removed strict sum-to-1 constraint to allow optional cls weight
+        assert abs(sum([self.loss_weights[k] for k in ['recon', 'kl']]) - 1.0) < 1e-5, \
+            f"Reconstruction and KL loss weights sum to {sum([self.loss_weights[k] for k in ['recon', 'kl']]):.4f}, must sum to 1.0"
 
     def _build_encoder(self):
         """Build three-layer encoder (input -> hidden -> latent)."""
