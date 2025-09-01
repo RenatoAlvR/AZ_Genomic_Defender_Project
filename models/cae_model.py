@@ -5,6 +5,7 @@ import numpy as np
 from typing import Dict, Any
 from tqdm import tqdm
 from pathlib import Path
+from torch.utils.data import DataLoader
 
 class ContrastiveAutoencoder(nn.Module):
     """Contrastive Autoencoder for detecting synthetic cell injections in scRNA-seq data."""
@@ -19,12 +20,16 @@ class ContrastiveAutoencoder(nn.Module):
             'temperature': 0.5,  # Contrastive loss temperature
             'dropout': 0.2,      # Dropout probability
             'device': 'cuda' if torch.cuda.is_available() else 'cpu',
-            'alpha': 0.7,        # Contrastive loss weight
-            'beta': 0.3          # Reconstruction loss weight
+            'loss_weights': {
+                'alpha': 0.7,       # Contrastive loss weight
+                'beta': 0.3,        # Reconstruction loss weight
+                'cls': 1.0          # Classification loss weight (for fine-tuning)
+            }
         }
 
         # Merge user config with defaults
         self.config = {**default_config, **(config or {})}
+        self.loss_weights = self.config.get('loss_weights', default_config['loss_weights'])
 
         # Extract parameters
         self.input_dim = self.config['input_dim']
@@ -33,8 +38,10 @@ class ContrastiveAutoencoder(nn.Module):
         self.temperature = self.config['temperature']
         self.dropout = self.config['dropout']
         self.device = self.config['device']
-        self.alpha = self.config['alpha']
-        self.beta = self.config['beta']
+
+        # Extract loss weights
+        self.alpha = self.loss_weights.get('alpha', 0.7)
+        self.beta = self.loss_weights.get('beta', 0.3)
 
         self._validate_config()
 
@@ -42,12 +49,13 @@ class ContrastiveAutoencoder(nn.Module):
         self.encoder = self._build_encoder()
         self.decoder = self._build_decoder()
         self.projection_head = self._build_projection_head()
+        self.classifier = nn.Linear(self.latent_dim, 1) # Binary Classification Head
 
         self.to(self.device)
 
     def _validate_config(self):
         """Validate configuration parameters."""
-        required_keys = {'input_dim', 'hidden_dim', 'latent_dim', 'temperature', 'dropout', 'alpha', 'beta'}
+        required_keys = {'input_dim', 'hidden_dim', 'latent_dim', 'temperature', 'dropout', 'loss_weights'}
         assert required_keys.issubset(self.config.keys()), \
             f"Missing required config keys: {required_keys - set(self.config.keys())}"
 
@@ -58,7 +66,11 @@ class ContrastiveAutoencoder(nn.Module):
         assert 0 < self.temperature < 1, "temperature must be between 0 and 1"
         assert 0 <= self.dropout < 1, "dropout must be in [0, 1)"
         assert self.device in ['cpu', 'cuda'], "Device must be 'cpu' or 'cuda'"
-        assert self.alpha + self.beta > 0, "loss weights sum must be positive"
+        assert 'alpha' in self.loss_weights and 'beta' in self.loss_weights, \
+            "loss_weights must include 'alpha' and 'beta'"
+        assert self.loss_weights['alpha'] + self.loss_weights['beta'] > 0, \
+            "Contrastive and reconstruction loss weights sum must be positive"
+        assert all(0 <= v for v in self.loss_weights.values()), "Loss weights must be non-negative"
 
     def _build_encoder(self):
         """Build three-layer encoder (input -> hidden -> latent)."""
@@ -136,14 +148,15 @@ class ContrastiveAutoencoder(nn.Module):
         proj = F.normalize(self.projection_head(z))
         return {'latent': z, 'recon': recon, 'proj': proj}
 
-    def compute_loss(self, x, positive_pairs, negative_pairs):
+    def compute_loss(self, x, positive_pairs, negative_pairs, labels: Optional[torch.Tensor] = None):
         """
-        Compute combined loss (reconstruction + contrastive).
+        Compute combined loss (reconstruction + contrastive + optional classification).
 
         Args:
             x: Input tensor (shape: [batch_size, input_dim])
             positive_pairs: Tensor of shape [n_pairs, 2] with indices of positive pairs
             negative_pairs: Tensor of shape [n_pairs, 2] with indices of negative pairs
+            labels: Optional tensor of binary labels (0: clean, 1: injected)
 
         Returns:
             Total loss
@@ -151,7 +164,13 @@ class ContrastiveAutoencoder(nn.Module):
         outputs = self(x)
         recon_loss = F.mse_loss(outputs['recon'], x)
         cont_loss = self.contrastive_loss(outputs['proj'], positive_pairs, negative_pairs)
-        return self.alpha * cont_loss + self.beta * recon_loss
+        loss = self.alpha * cont_loss + self.beta * recon_loss
+        if labels is not None:
+            labels = labels.to(self.device)
+            logits = self.classifier(outputs['latent'])  # Use latent representation for classification
+            cls_loss = F.binary_cross_entropy_with_logits(logits.squeeze(-1), labels.float())
+            loss += self.loss_weights.get('cls', 1.0) * cls_loss  # Add classification loss
+        return loss
 
     def fit(self, data_loader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer, epochs: int, patience: int = 20):
         """
@@ -169,14 +188,22 @@ class ContrastiveAutoencoder(nn.Module):
 
         for epoch in range(epochs):
             total_loss = 0.0
+            recon_loss_accum = 0.0
+            cont_loss_accum = 0.0
+            cls_loss_accum = 0.0
             num_batches = 0
 
             for batch_data in tqdm(data_loader, desc=f"Epoch {epoch} Training"):
                 # Handle tuple or list output from DataLoader
-                if isinstance(batch_data, (tuple, list)):
-                    batch_data = batch_data[0]  # Extract the first tensor
-                    
-                x = batch_data.to(self.device)
+                if isinstance(batch_data, (tuple, list)) and len(batch_data) == 2:
+                    x, labels = batch_data
+                else:
+                    x, labels = batch_data[0], None
+                
+                x = x.to(self.device)
+                if labels is not None:
+                    labels = labels.to(self.device)
+
                 batch_size = x.shape[0]
 
                 # Generate positive and negative pairs
@@ -186,15 +213,27 @@ class ContrastiveAutoencoder(nn.Module):
                 negative_pairs = torch.combinations(torch.arange(batch_size), r=2).to(self.device)
 
                 optimizer.zero_grad()
-                loss = self.compute_loss(x, positive_pairs, negative_pairs)
+                loss = self.compute_loss(x, positive_pairs, negative_pairs, labels)
                 loss.backward()
                 optimizer.step()
 
+                outputs = self(x)
+                recon_loss = F.mse_loss(outputs['recon'], x)
+                cont_loss = self.contrastive_loss(outputs['proj'], positive_pairs, negative_pairs)
                 total_loss += loss.item()
+                recon_loss_accum += recon_loss.item()
+                cont_loss_accum += cont_loss.item()
+                if labels is not None:
+                    logits = self.classifier(outputs['latent'])
+                    cls_loss = F.binary_cross_entropy_with_logits(logits.squeeze(-1), labels.float())
+                    cls_loss_accum += cls_loss.item()
                 num_batches += 1
 
             avg_loss = total_loss / num_batches
-            print(f"Epoch {epoch}: Avg Train Loss: {avg_loss:.4f} (Recon: {self.beta * F.mse_loss(self(x)['recon'], x).item():.4f}, Contrastive: {self.alpha * self.contrastive_loss(self(x)['proj'], positive_pairs, negative_pairs).item():.4f})")
+            avg_recon_loss = recon_loss_accum / num_batches
+            avg_cont_loss = cont_loss_accum / num_batches
+            avg_cls_loss = cls_loss_accum / num_batches if labels is not None else 0.0
+            print(f"Epoch {epoch}: Avg Train Loss: {avg_loss:.4f} (Recon: {avg_recon_loss:.4f}, Contrastive: {avg_cont_loss:.4f}, Cls: {avg_cls_loss:.4f})")
 
             # Early stopping
             if avg_loss < best_loss:
@@ -225,7 +264,11 @@ class ContrastiveAutoencoder(nn.Module):
                 outputs['proj'],
                 outputs['proj'].mean(dim=0, keepdim=True)
             )
-        return scores.cpu().numpy()
+            # Incorporate classification logits for fine-tuned model
+            logits = self.classifier(outputs['latent'])
+            cls_scores = torch.sigmoid(logits).squeeze(-1)  # Probability of being injected
+            combined_scores = 0.5 * scores + 0.5 * cls_scores  # Combine anomaly and classification scores
+        return combined_scores.cpu().numpy()
 
     def save(self, path: str):
         """
@@ -261,7 +304,12 @@ class ContrastiveAutoencoder(nn.Module):
         map_location = device if device else ('cuda' if torch.cuda.is_available() else 'cpu')
         checkpoint = torch.load(path, map_location=map_location)
         model = cls(checkpoint.get('config'))
-        model.load_state_dict(checkpoint['state_dict'])
+        state_dict = checkpoint['state_dict']
+        # Handle missing classifier weights for incremental training
+        model_state_dict = model.state_dict()
+        state_dict = {k: v for k, v in state_dict.items() if k in model_state_dict}
+        model_state_dict.update(state_dict)
+        model.load_state_dict(model_state_dict, strict=False)
         model.to(map_location)
         print(f"CAE model loaded from {path} to device {map_location}")
         return model

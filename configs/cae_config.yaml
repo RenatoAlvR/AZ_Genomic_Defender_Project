@@ -5,8 +5,10 @@ latent_dim: 128
 temperature: 0.5
 dropout: 0.2
 device: cuda
-alpha: 0.7  # Contrastive loss weight
-beta: 0.3   # Reconstruction loss weight
+loss_weights:
+  alpha: 0.7  # Contrastive loss weight
+  beta: 0.3   # Reconstruction loss weight
+  cls: 1.0
 detection_threshold: 0.95
 batch_size: 10000  # Preprocessing batch size
 k_neighbors: 5     # For GNN-AE (unused for CAE)
