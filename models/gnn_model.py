@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from pathlib import Path
 from torch_geometric.nn import GCNConv
 from torch_geometric.utils import dropout_edge
@@ -98,7 +98,7 @@ class GNNAutoencoder(nn.Module):
         recon = self.decoder(h)
         return {'recon': recon, 'latent': h}
 
-   def compute_loss(self, x: torch.Tensor, edge_index: torch.Tensor, labels: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def compute_loss(self, x: torch.Tensor, edge_index: torch.Tensor, labels: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Compute reconstruction and optional classification loss for label flip detection."""
         outputs = self(x, edge_index)
         recon_loss = F.mse_loss(outputs['recon'], x, reduction='sum') / x.size(0)

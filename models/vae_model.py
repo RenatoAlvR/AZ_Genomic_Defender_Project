@@ -19,7 +19,7 @@ class VariationalAutoencoder(nn.Module):
             'device': 'cuda' if torch.cuda.is_available() else 'cpu',
             'loss_weights': {
                 'recon': 0.8,    # Reconstruction loss weight
-                'kl': 0.2        # KL-divergence loss weight
+                'kl': 0.2,       # KL-divergence loss weight
                 'cls': 1.0       # Classification loss weight for fine-tuning
             }
         }
