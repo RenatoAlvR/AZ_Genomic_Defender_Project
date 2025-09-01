@@ -20,6 +20,7 @@ class VariationalAutoencoder(nn.Module):
             'loss_weights': {
                 'recon': 0.8,    # Reconstruction loss weight
                 'kl': 0.2        # KL-divergence loss weight
+                'cls': 1.0       # Classification loss weight for fine-tuning
             }
         }
 
@@ -41,6 +42,7 @@ class VariationalAutoencoder(nn.Module):
         self.fc_mu = nn.Linear(self.hidden_dim, self.latent_dim)
         self.fc_log_var = nn.Linear(self.hidden_dim, self.latent_dim)
         self.decoder = self._build_decoder()
+        self.classifier = nn.Linear(self.latent_dim, 1)  # Binary classification head
 
         self.to(self.device)
 
@@ -112,11 +114,17 @@ class VariationalAutoencoder(nn.Module):
         kl_loss = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp()) / x.size(0)
         return recon_loss, kl_loss
 
-    def compute_loss(self, x: torch.Tensor) -> torch.Tensor:
-        """Compute total loss (reconstruction + KL-divergence)."""
+    def compute_loss(self, x: torch.Tensor, labels: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Compute total loss (reconstruction + KL-divergence + optional classification)."""
         outputs = self(x)
         recon_loss, kl_loss = self._vae_loss(outputs['recon'], x, outputs['mu'], outputs['log_var'])
-        return self.loss_weights['recon'] * recon_loss + self.loss_weights['kl'] * kl_loss
+        loss = self.loss_weights['recon'] * recon_loss + self.loss_weights['kl'] * kl_loss
+        if labels is not None:
+            labels = labels.to(self.device)
+            logits = self.classifier(outputs['mu'])  # Use mean for classification
+            cls_loss = F.binary_cross_entropy_with_logits(logits.squeeze(-1), labels.float())
+            loss += self.loss_weights.get('cls', 1.0) * cls_loss  # Add classification loss
+        return loss
 
     def fit(self, data_loader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer, epochs: int, patience: int = 20, validation_loader: Optional[torch.utils.data.DataLoader] = None):
         """Train the VAE model."""
@@ -128,18 +136,22 @@ class VariationalAutoencoder(nn.Module):
             train_loss_accum = 0.0
             recon_loss_accum = 0.0
             kl_loss_accum = 0.0
+            cls_loss_accum = 0.0
             num_batches = 0
 
-            for batch_data in data_loader:
+            for batch_data in tqdm(data_loader, desc=f"Epoch {epoch} Training"):
                 # Handle tuple or list output from DataLoader
-                if isinstance(batch_data, (tuple, list)):
-                    batch_data = batch_data[0]  # Extract the first tensor
+                if isinstance(batch_data, (tuple, list)) and len(batch_data) == 2:
+                    x, labels = batch_data
+                else:
+                    x, labels = batch_data[0], None
                 
-                x = batch_data if isinstance(batch_data, torch.Tensor) else batch_data['x']
                 x = x.to(self.device)
+                if labels is not None:
+                    labels = labels.to(self.device)
 
                 optimizer.zero_grad()
-                total_loss = self.compute_loss(x)
+                total_loss = self.compute_loss(x, labels)
                 total_loss.backward()
                 optimizer.step()
 
@@ -148,11 +160,18 @@ class VariationalAutoencoder(nn.Module):
                 train_loss_accum += total_loss.item()
                 recon_loss_accum += recon_loss.item()
                 kl_loss_accum += kl_loss.item()
+                if labels is not None:
+                    logits = self.classifier(outputs['mu'])
+                    cls_loss = F.binary_cross_entropy_with_logits(logits.squeeze(-1), labels.float())
+                    cls_loss_accum += cls_loss.item()
                 num_batches += 1
 
             avg_train_loss = train_loss_accum / num_batches
+            avg_recon_loss = recon_loss_accum / num_batches
+            avg_kl_loss = kl_loss_accum / num_batches
+            avg_cls_loss = cls_loss_accum / num_batches if labels is not None else 0.0
             print(f"Epoch {epoch}: Avg Train Loss: {avg_train_loss:.4f} "
-                  f"(Recon: {recon_loss_accum / num_batches:.4f}, KL: {kl_loss_accum / num_batches:.4f})")
+                  f"(Recon: {avg_recon_loss:.4f}, KL: {avg_kl_loss:.4f}, Cls: {avg_cls_loss:.4f})")
 
             if validation_loader:
                 self.eval()
@@ -160,9 +179,14 @@ class VariationalAutoencoder(nn.Module):
                 val_batches = 0
                 with torch.no_grad():
                     for batch_data in validation_loader:
-                        x_val = batch_data if isinstance(batch_data, torch.Tensor) else batch_data['x']
+                        if isinstance(batch_data, (tuple, list)) and len(batch_data) == 2:
+                            x_val, labels_val = batch_data
+                        else:
+                            x_val, labels_val = batch_data[0], None
                         x_val = x_val.to(self.device)
-                        total_loss = self.compute_loss(x_val)
+                        if labels_val is not None:
+                            labels_val = labels_val.to(self.device)
+                        total_loss = self.compute_loss(x_val, labels_val)
                         val_loss_accum += total_loss.item()
                         val_batches += 1
 

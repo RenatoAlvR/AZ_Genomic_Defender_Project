@@ -42,6 +42,7 @@ class GNNAutoencoder(nn.Module):
         # Encoder and decoder
         self.encoder = self._build_encoder()
         self.decoder = self._build_decoder()
+        self.classifier = nn.Linear(self.latent_dim, 1)  # Binary classification head
 
         self.to(self.device)
 
@@ -97,11 +98,17 @@ class GNNAutoencoder(nn.Module):
         recon = self.decoder(h)
         return {'recon': recon, 'latent': h}
 
-    def compute_loss(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-        """Compute reconstruction loss for label flip detection."""
+   def compute_loss(self, x: torch.Tensor, edge_index: torch.Tensor, labels: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Compute reconstruction and optional classification loss for label flip detection."""
         outputs = self(x, edge_index)
         recon_loss = F.mse_loss(outputs['recon'], x, reduction='sum') / x.size(0)
-        return self.loss_weight_recon * recon_loss
+        loss = self.loss_weight_recon * recon_loss
+        if labels is not None:
+            labels = labels.to(self.device)
+            logits = self.classifier(outputs['z'].mean(dim=1))  # Mean pooling for graph-level classification
+            cls_loss = F.binary_cross_entropy_with_logits(logits.squeeze(-1), labels.float())
+            loss += cls_loss  # Combine reconstruction and classification loss
+        return loss
 
     def fit(self, data_loader, optimizer: torch.optim.Optimizer, epochs: int, patience: int = 20):
         """Train the GNN-AE model."""
@@ -110,25 +117,32 @@ class GNNAutoencoder(nn.Module):
         no_improve = 0
 
         for epoch in range(epochs):
-            for graph_data in data_loader:  # Iterate over DataLoader to get Data object
+            total_loss = 0.0
+            num_batches = 0
+            for graph_data in tqdm(data_loader, desc=f"Epoch {epoch} Training"):
                 x = graph_data.x.to(self.device)
                 edge_index = graph_data.edge_index.to(self.device)
+                labels = graph_data.labels.to(self.device) if hasattr(graph_data, 'labels') else None
 
                 optimizer.zero_grad()
-                total_loss = self.compute_loss(x, edge_index)
-                total_loss.backward()
+                loss = self.compute_loss(x, edge_index, labels)
+                loss.backward()
                 optimizer.step()
 
-                print(f"Epoch {epoch}: Loss {total_loss.item():.4f}")
+                total_loss += loss.item()
+                num_batches += 1
 
-                if total_loss < best_loss:
-                    best_loss = total_loss.item()
-                    no_improve = 0
-                else:
-                    no_improve += 1
-                    if no_improve >= patience:
-                        print(f"Early stopping triggered after {epoch + 1} epochs.")
-                        break
+            avg_loss = total_loss / num_batches
+            print(f"Epoch {epoch}: Avg Train Loss: {avg_loss:.4f}")
+
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                no_improve = 0
+            else:
+                no_improve += 1
+                if no_improve >= patience:
+                    print(f"Early stopping triggered after {epoch + 1} epochs.")
+                    break
 
     def detect(self, graph_data) -> np.ndarray:
         """Detect label flips using reconstruction errors."""

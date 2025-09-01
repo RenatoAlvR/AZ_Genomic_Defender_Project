@@ -87,6 +87,7 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
     output_dir = Path('preprocessing') / dataset_name
     data_path = output_dir / 'data.npy'
     graph_path = output_dir / 'edge_index.pt'
+    labels_path = output_dir / 'label.txt'
 
     if data_path.exists():
         print(f"Loading preprocessed data from {data_path}")
@@ -94,6 +95,12 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
         # Verify shape matches expected input_dim
         if X.shape[1] != input_dim:
             raise ValueError(f"Loaded data has {X.shape[1]} features, expected {input_dim}")
+        labels = None
+        if labels_path.exists():
+            print(f"Loading labels from {labels_path}")
+            labels = np.loadtxt(labels_path)
+            if labels.shape[0] != X.shape[0]:
+                raise ValueError(f"Labels shape {labels.shape[0]} does not match data shape {X.shape[0]}")
 
     else:
         # Load 10x Genomics data
@@ -140,6 +147,7 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
     
     # Convert to PyTorch tensor
     X_torch = torch.tensor(X, dtype=torch.float32)
+    labels_torch = torch.tensor(labels, dtype=torch.long) if labels is not None else None
 
     if model == 'gnn_ae':
         if graph_path.exists():
@@ -163,14 +171,24 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
 
             torch.save(edge_index, graph_path)
             print(f"knn_graph took {time.time() - start_time:.2f} seconds")
-            return Data(x=X_torch, edge_index=edge_index)
+
+        # Create Data object
+        data = Data(x=X_torch, edge_index=edge_index)
+        if labels_torch is not None:
+            data.labels = labels_torch
+        return data  # Return single Data object for GNN-AE
     
     # Create DataLoader for other models
-    dataset = TensorDataset(X_torch)
-    data_loader = DataLoader(dataset, batch_size=train_batch_size, shuffle=True, drop_last=True, collate_fn=lambda batch: torch.stack([x[0] for x in batch]))
+    if labels_torch is not None:
+        dataset = TensorDataset(X_torch, labels_torch)
+    else:
+        dataset = TensorDataset(X_torch)
+    data_loader = DataLoader(dataset, batch_size=train_batch_size, shuffle=True, drop_last=True)
     
     # Debug DataLoader output
     batch_example = next(iter(data_loader))
-    print(f"Preprocess DataLoader batch example: shape: {batch_example.shape}, type: {type(batch_example)}")
+    print(f"Preprocess DataLoader batch example: shape: {batch_example[0].shape}, type: {type(batch_example)}")
+    if len(batch_example) > 1:
+        print(f"Labels shape: {batch_example[1].shape}")
     return data_loader
     
