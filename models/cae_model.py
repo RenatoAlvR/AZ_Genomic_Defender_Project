@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from tqdm import tqdm
 from pathlib import Path
 from torch.utils.data import DataLoader
