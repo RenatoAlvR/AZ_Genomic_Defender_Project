@@ -1,5 +1,5 @@
 model: ddpm
-input_dim: 3000
+input_dim: 10000
 num_timesteps: 1000
 beta_schedule: linear
 beta_start: 0.0001

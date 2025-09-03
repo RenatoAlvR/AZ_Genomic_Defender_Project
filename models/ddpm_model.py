@@ -203,51 +203,58 @@ class DenoisingDiffusionPM(nn.Module):
         predicted_noise = self.model(x_t, t)
         return F.mse_loss(predicted_noise, noise)
 
-    def generate(self, num_samples: int, poison_factor: float = 0.0, seed: Optional[int] = None) -> torch.Tensor:
+    def generate(self, num_samples: int, poison_factor: float = 0.0, seed: Optional[int] = None, batch_size: int = 1000) -> torch.Tensor:
         """Generate simulated poisoned genomic data using reverse diffusion process.
-        
+    
         Args:
             num_samples (int): Number of samples to generate.
             poison_factor (float): Controls poisoning intensity (0.0 for clean, 1.0 for fully noisy).
             seed (Optional[int]): Random seed for reproducibility.
-        
+            batch_size (int): Number of samples to process per batch.
+    
         Returns:
             torch.Tensor: Generated samples of shape (num_samples, input_dim).
         """
         if seed is not None:
             torch.manual_seed(seed)
-        
+    
         self.eval()
-        shape = (num_samples, self.config['input_dim'])
-        x_t = torch.randn(shape, device=self.config['device'])
+        shape = (batch_size, self.config['input_dim'])
         start_timestep = self.num_timesteps - 1
         end_timestep = int(self.generation_timestep * (1 - poison_factor))
+    
+        generated_samples = []
+        for i in range(0, num_samples, batch_size):
+            current_batch_size = min(batch_size, num_samples - i)
+            x_t = torch.randn((current_batch_size, self.config['input_dim']), device=self.config['device'])
         
-        with torch.no_grad():
-            for t in range(start_timestep, end_timestep - 1, -1):
-                t_tensor = torch.full((num_samples,), t, device=self.config['device'], dtype=torch.long)
-                predicted_noise = self.model(x_t, t_tensor)
-                alpha_t = self._extract(self.alphas, t_tensor, x_t.shape)
-                alpha_cumprod_t = self._extract(self.alphas_cumprod, t_tensor, x_t.shape)
-                beta_t = self._extract(self.betas, t_tensor, x_t.shape)
+            with torch.no_grad():
+                for t in range(start_timestep, end_timestep - 1, -1):
+                    t_tensor = torch.full((current_batch_size,), t, device=self.config['device'], dtype=torch.long)
+                    predicted_noise = self.model(x_t, t_tensor)
+                    alpha_t = self._extract(self.alphas, t_tensor, x_t.shape)
+                    alpha_cumprod_t = self._extract(self.alphas_cumprod, t_tensor, x_t.shape)
+                    beta_t = self._extract(self.betas, t_tensor, x_t.shape)
                 
-                # Reverse diffusion step
-                x_t = (1 / torch.sqrt(alpha_t)) * (
-                    x_t - ((1 - alpha_t) / torch.sqrt(1 - alpha_cumprod_t)) * predicted_noise
-                )
-                if t > end_timestep:
-                    x_t += torch.sqrt(beta_t) * torch.randn_like(x_t)
+                    # Reverse diffusion step
+                    x_t = (1 / torch.sqrt(alpha_t)) * (
+                        x_t - ((1 - alpha_t) / torch.sqrt(1 - alpha_cumprod_t)) * predicted_noise
+                    )
+                    if t > end_timestep:
+                        x_t += torch.sqrt(beta_t) * torch.randn_like(x_t)
         
-        # Apply additional poisoning if poison_factor > 0
-        if poison_factor > 0:
-            # Simulate biological perturbations (e.g., random gene over-expression)
-            num_perturbed_features = int(0.1 * self.config['input_dim'])  # Perturb 10% of features
-            feature_indices = torch.randperm(self.config['input_dim'])[:num_perturbed_features]
-            perturbation = torch.randn(num_samples, num_perturbed_features, device=self.config['device'])
-            perturbation = perturbation * poison_factor * 2.0  # Scale perturbation
-            x_t[:, feature_indices] += perturbation
+            # Apply additional poisoning if poison_factor > 0
+            if poison_factor > 0:
+                # Simulate biological perturbations (e.g., random gene over-expression)
+                num_perturbed_features = int(0.1 * self.config['input_dim'])  # Perturb 10% of features
+                feature_indices = torch.randperm(self.config['input_dim'])[:num_perturbed_features]
+                perturbation = torch.randn(current_batch_size, num_perturbed_features, device=self.config['device'])
+                perturbation = perturbation * poison_factor * 2.0  # Scale perturbation
+                x_t[:, feature_indices] += perturbation
         
-        return x_t
+            generated_samples.append(x_t.cpu())
+    
+        return torch.cat(generated_samples, dim=0)
 
     def fit(self, data_loader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer, epochs: int, patience: int = 20):
         """Train the DDPM model."""

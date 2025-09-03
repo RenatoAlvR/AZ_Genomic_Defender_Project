@@ -13,6 +13,7 @@ from torch_geometric.nn import knn_graph
 from sklearn.neighbors import kneighbors_graph
 from pathlib import Path
 from typing import Dict, Any, Union
+import scipy.sparse
 
 def save_and_visualize(adata: sc.AnnData, X_pca: np.ndarray, data_dir: Path, dataset_name: str):
     """Save preprocessed PCA data and generate violin plot for gene distributions.
@@ -124,6 +125,7 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
         adata = sc.read_10x_mtx(data_dir, var_names='gene_symbols', cache=False)
         print(f"Initial AnnData shape: {adata.shape}")
 
+        '''
         # Generate UMAP for raw data
         output_dir = Path('preprocessing') / dataset_name
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -137,6 +139,7 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
         plt.savefig(output_dir / 'raw_umap.png', dpi=300)
         plt.close()
         print(f"Saved raw UMAP plot to {output_dir / 'raw_umap.png'}")
+        '''
 
         # Check if dimensions are transposed (genes as obs, cells as vars)
         expected_cells = 69032  # From barcodes.tsv.gz
@@ -154,9 +157,11 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
 
 
         if raw:
+            print(f"Going to pass raw data to the model...")
             # Use raw data, limit to input_dim features if necessary
             X = adata.X[:, :input_dim].toarray() if scipy.sparse.issparse(adata.X) else adata.X[:, :input_dim]
         else:
+            print(f"Processsing data for the model...")
             # Process in batches if dataset is large
             n_cells = adata.n_obs
             batch_size = min(batch_size, n_cells)
@@ -183,6 +188,7 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
     
     # Convert to PyTorch tensor
     X_torch = torch.tensor(X, dtype=torch.float32)
+    labels_torch = None
     if labels is not None:
         labels_torch = torch.tensor(labels, dtype=torch.long)
 
