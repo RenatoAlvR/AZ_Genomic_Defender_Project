@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, Any, Union
 from preprocessing.preprocess_train import save_and_visualize
 
-def preprocess_detect(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray, Data]:
+def preprocess_detect(data_dir: str, config: Dict[str, Any]) -> tuple[sc.AnnData, Union[np.ndarray, Data], Any]:
     """Preprocess 10x Genomics data for anomaly detection.
 
     Args:
@@ -19,14 +19,13 @@ def preprocess_detect(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray
         config (Dict): Configuration dictionary with model, input_dim, batch_size, k_neighbors.
 
     Returns:
-        np.ndarray: PCA-reduced data (n_cells, input_dim) for CAE, VAE, DDPM.
-        Data: PyTorch Geometric Data object with x and edge_index for GNN-AE.
+        tuple: (AnnData object, processed data (np.ndarray for CAE/VAE/DDPM, Data for GNN-AE), PCA object)
     """
     # Extract config parameters
     model = config.get('model', '').lower()
     input_dim = config.get('input_dim', 3000)
-    batch_size = config.get('batch_size', 10000)  # For memory-efficient processing
-    k_neighbors = config.get('k_neighbors', 5)  # For GNN-AE graph construction
+    batch_size = config.get('batch_size', 10000)
+    k_neighbors = config.get('k_neighbors', 5)
 
     # Validate inputs
     data_dir = Path(data_dir)
@@ -55,9 +54,9 @@ def preprocess_detect(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray
     plt.close()
     print(f"Saved raw UMAP plot to {output_dir / 'raw_umap.png'}")
 
-    # Check if dimensions are transposed (genes as obs, cells as vars)
-    expected_cells = 69032  # From barcodes.tsv.gz
-    expected_genes = 33538  # From features.tsv.gz
+    # Check if dimensions are transposed
+    expected_cells = 69032
+    expected_genes = 33538
     if adata.shape == (expected_genes, expected_cells):
         print("Transposing AnnData to correct shape (cells × genes)")
         adata.X = adata.X.T
@@ -73,15 +72,20 @@ def preprocess_detect(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray
     n_cells = adata.n_obs
     batch_size = min(batch_size, n_cells)
     processed_data = []
+    pca = None  # Initialize PCA object
 
     for start in range(0, n_cells, batch_size):
         end = min(start + batch_size, n_cells)
         batch = adata[start:end].copy()
 
-        # Preprocessing steps (same as training)
+        # Preprocessing steps
         sc.pp.normalize_total(batch, target_sum=1e4)
         sc.pp.log1p(batch)
         sc.pp.pca(batch, n_comps=input_dim, svd_solver='arpack')
+
+        # Store PCA object from the first batch (assuming consistent PCA across batches)
+        if pca is None:
+            pca = batch.uns['pca']
 
         # Extract PCA features
         batch_data = batch.obsm['X_pca']
@@ -94,10 +98,8 @@ def preprocess_detect(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray
     save_and_visualize(adata, X, data_dir, dataset_name)
 
     if model == 'gnn_ae':
-        # Convert to torch tensor for graph construction
         X_torch = torch.tensor(X, dtype=torch.float32)
-        # Construct k-NN graph
         edge_index = knn_graph(X_torch, k=k_neighbors, loop=False)
-        return Data(x=X_torch, edge_index=edge_index)
+        return adata, Data(x=X_torch, edge_index=edge_index), pca
     
-    return X
+    return adata, X, pca
