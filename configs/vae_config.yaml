@@ -13,5 +13,6 @@ batch_size: 10000  # Preprocessing batch size
 k_neighbors: 5      # For GNN-AE (unused for VAE)
 train_batch_size: 32  # Training batch size
 epochs: 100
-learning_rate: 0.001
+learning_rate: 0.00005
 patience: 20
+raw: False

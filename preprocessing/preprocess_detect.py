@@ -1,10 +1,15 @@
 import scanpy as sc
 import torch
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import umap
 from torch_geometric.data import Data
 from torch_geometric.nn import knn_graph
 from pathlib import Path
 from typing import Dict, Any, Union
+from preprocessing.preprocess_train import save_and_visualize
 
 def preprocess_detect(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray, Data]:
     """Preprocess 10x Genomics data for anomaly detection.
@@ -33,6 +38,36 @@ def preprocess_detect(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray
 
     # Load 10x Genomics data
     adata = sc.read_10x_mtx(data_dir, var_names='gene_symbols', cache=False)
+    print(f"Initial AnnData shape: {adata.shape}")
+
+    # Generate UMAP for raw data
+    dataset_name = data_dir.name
+    output_dir = Path('preprocessing') / dataset_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    umap_embedding = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=42).fit_transform(adata.X)
+    plt.figure(figsize=(10, 8))
+    plt.scatter(umap_embedding[:, 0], umap_embedding[:, 1], s=10, alpha=0.5)
+    plt.title(f'UMAP of Raw Data - {dataset_name}')
+    plt.xlabel('UMAP 1')
+    plt.ylabel('UMAP 2')
+    plt.tight_layout()
+    plt.savefig(output_dir / 'raw_umap.png', dpi=300)
+    plt.close()
+    print(f"Saved raw UMAP plot to {output_dir / 'raw_umap.png'}")
+
+    # Check if dimensions are transposed (genes as obs, cells as vars)
+    expected_cells = 69032  # From barcodes.tsv.gz
+    expected_genes = 33538  # From features.tsv.gz
+    if adata.shape == (expected_genes, expected_cells):
+        print("Transposing AnnData to correct shape (cells × genes)")
+        adata.X = adata.X.T
+        obs_names = adata.var_names
+        var_names = adata.obs_names
+        adata.obs_names = obs_names
+        adata.var_names = var_names
+        adata.obs = adata.obs.reindex(adata.obs_names)
+        adata.var = adata.var.reindex(adata.var_names)
+        print(f"Corrected AnnData shape: {adata.shape}")
 
     # Process in batches if dataset is large
     n_cells = adata.n_obs
@@ -54,6 +89,9 @@ def preprocess_detect(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray
 
     # Combine batches
     X = np.concatenate(processed_data, axis=0)
+
+    # Save preprocessed data and visualize
+    save_and_visualize(adata, X, data_dir, dataset_name)
 
     if model == 'gnn_ae':
         # Convert to torch tensor for graph construction

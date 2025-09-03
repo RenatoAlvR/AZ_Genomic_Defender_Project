@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import umap
 from torch.utils.data import TensorDataset, DataLoader
 from torch_geometric.data import Data
 from torch_geometric.nn import knn_graph
@@ -53,6 +54,20 @@ def save_and_visualize(adata: sc.AnnData, X_pca: np.ndarray, data_dir: Path, dat
     plt.savefig(plot_path, dpi=300)
     plt.close()
     print(f"Saved gene distribution plot to {plot_path}")
+
+    # UMAP visualization
+    umap_embedding = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=42).fit_transform(X_pca)
+    plt.figure(figsize=(10, 8))
+    plt.scatter(umap_embedding[:, 0], umap_embedding[:, 1], s=10, alpha=0.5)
+    plt.title(f'UMAP of {dataset_name}')
+    plt.xlabel('UMAP 1')
+    plt.ylabel('UMAP 2')
+    plt.tight_layout()
+
+    # Save UMAP visualization
+    plt.savefig(output_dir / 'umap.png', dpi=300)
+    plt.close()
+    print(f"Saved UMAP plot to {output_dir / 'umap.png'}")
     
 def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray, Data]:
     """Preprocess 10x Genomics data for training.
@@ -72,6 +87,7 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
     batch_size = config.get('batch_size', 10000)  # For memory-efficient processing
     k_neighbors = config.get('k_neighbors', 5)  # For GNN-AE graph construction
     train_batch_size = config.get('train_batch_size', 32)  # For DataLoader
+    raw = config.get('raw', False)  # Use or not the raw data
 
     # Validate inputs
     data_dir = Path(data_dir)
@@ -87,15 +103,16 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
     output_dir = Path('preprocessing') / dataset_name
     data_path = output_dir / 'data.npy'
     graph_path = output_dir / 'edge_index.pt'
-    labels_path = output_dir / 'label.txt'
+    labels_path = output_dir / 'labels.txt'
+    labels = None
 
-    if data_path.exists():
+    if data_path.exists() and not raw:
         print(f"Loading preprocessed data from {data_path}")
         X = np.load(data_path)
         # Verify shape matches expected input_dim
         if X.shape[1] != input_dim:
             raise ValueError(f"Loaded data has {X.shape[1]} features, expected {input_dim}")
-        labels = None
+
         if labels_path.exists():
             print(f"Loading labels from {labels_path}")
             labels = np.loadtxt(labels_path)
@@ -106,6 +123,20 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
         # Load 10x Genomics data
         adata = sc.read_10x_mtx(data_dir, var_names='gene_symbols', cache=False)
         print(f"Initial AnnData shape: {adata.shape}")
+
+        # Generate UMAP for raw data
+        output_dir = Path('preprocessing') / dataset_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        umap_embedding = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=42).fit_transform(adata.X)
+        plt.figure(figsize=(10, 8))
+        plt.scatter(umap_embedding[:, 0], umap_embedding[:, 1], s=10, alpha=0.5)
+        plt.title(f'UMAP of Raw Data - {dataset_name}')
+        plt.xlabel('UMAP 1')
+        plt.ylabel('UMAP 2')
+        plt.tight_layout()
+        plt.savefig(output_dir / 'raw_umap.png', dpi=300)
+        plt.close()
+        print(f"Saved raw UMAP plot to {output_dir / 'raw_umap.png'}")
 
         # Check if dimensions are transposed (genes as obs, cells as vars)
         expected_cells = 69032  # From barcodes.tsv.gz
@@ -121,33 +152,39 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
             adata.var = adata.var.reindex(adata.var_names)
             print(f"Corrected AnnData shape: {adata.shape}")
 
-        # Process in batches if dataset is large
-        n_cells = adata.n_obs
-        batch_size = min(batch_size, n_cells)
-        processed_data = []
 
-        for start in range(0, n_cells, batch_size):
-            end = min(start + batch_size, n_cells)
-            batch = adata[start:end].copy()
+        if raw:
+            # Use raw data, limit to input_dim features if necessary
+            X = adata.X[:, :input_dim].toarray() if scipy.sparse.issparse(adata.X) else adata.X[:, :input_dim]
+        else:
+            # Process in batches if dataset is large
+            n_cells = adata.n_obs
+            batch_size = min(batch_size, n_cells)
+            processed_data = []
 
-            # Preprocessing steps
-            sc.pp.normalize_total(batch, target_sum=1e4)
-            sc.pp.log1p(batch)
-            sc.pp.pca(batch, n_comps=input_dim, svd_solver='arpack')
+            for start in range(0, n_cells, batch_size):
+                end = min(start + batch_size, n_cells)
+                batch = adata[start:end].copy()
 
-            # Extract PCA features
-            batch_data = batch.obsm['X_pca']
-            processed_data.append(batch_data)
+                # Preprocessing steps
+                sc.pp.normalize_total(batch, target_sum=1e4)
+                sc.pp.log1p(batch)
+                sc.pp.pca(batch, n_comps=input_dim, svd_solver='arpack')
 
-        # Combine batches
-        X = np.concatenate(processed_data, axis=0)
+                # Extract PCA features
+                batch_data = batch.obsm['X_pca']
+                processed_data.append(batch_data)
+
+            # Combine batches
+            X = np.concatenate(processed_data, axis=0)
         
         # Save preprocessed data and visualize
         save_and_visualize(adata, X, data_dir, dataset_name)
     
     # Convert to PyTorch tensor
     X_torch = torch.tensor(X, dtype=torch.float32)
-    labels_torch = torch.tensor(labels, dtype=torch.long) if labels is not None else None
+    if labels is not None:
+        labels_torch = torch.tensor(labels, dtype=torch.long)
 
     if model == 'gnn_ae':
         if graph_path.exists():

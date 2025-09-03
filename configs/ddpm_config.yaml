@@ -17,3 +17,4 @@ train_batch_size: 8 # Training batch size
 epochs: 500
 learning_rate: 0.0001
 patience: 50
+raw: True

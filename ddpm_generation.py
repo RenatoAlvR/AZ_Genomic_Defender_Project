@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scanpy import AnnData
 from pathlib import Path
+import umap
 
 # Load DDPM model
 model = DenoisingDiffusionPM.load('weights/breast_ddpm_neoplastic1.pt')
@@ -45,6 +46,17 @@ plt.title('Gene Expression Distributions - Generated Data')
 plt.xticks(rotation=45)
 plt.tight_layout()
 plt.savefig(output_dir / 'gene_distributions.png', dpi=300)
+plt.close()
+
+# UMAP visualization
+umap_embedding = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=42).fit_transform(adata.X)
+plt.figure(figsize=(10, 8))
+plt.scatter(umap_embedding[:, 0], umap_embedding[:, 1], s=10, alpha=0.5)
+plt.title('UMAP of Generated Data')
+plt.xlabel('UMAP 1')
+plt.ylabel('UMAP 2')
+plt.tight_layout()
+plt.savefig(output_dir / 'umap.png', dpi=300)
 plt.close()
 
 '''

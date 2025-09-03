@@ -14,3 +14,4 @@ train_batch_size: 32  # Unused for GNN-AE (processes entire graph)
 epochs: 100
 learning_rate: 0.001
 patience: 20
+raw: False
