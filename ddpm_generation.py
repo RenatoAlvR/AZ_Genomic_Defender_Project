@@ -9,16 +9,16 @@ from pathlib import Path
 import umap
 
 # Load DDPM model
-model = DenoisingDiffusionPM.load('weights/raw_ddpm.pt')
+model = DenoisingDiffusionPM.load('weights/raw_ddpm_more_ram.pt')
 
 # Generate data
-generated_data = model.generate(num_samples=5000, poison_factor=0.0, batch_size=1000).cpu().numpy()
+generated_data = model.generate(num_samples=10000, poison_factor=0.0, batch_size=500).cpu().numpy()
 
 # Load gene names from real data
 gene_names = pd.read_csv('preprocessing/mix_neoplastic1/genes.txt', header=None).values.flatten()
 
 # Create synthetic cell names
-cell_names = [f'SYN_CELL_{i+1}' for i in range(1000)]
+cell_names = [f'SYN_CELL_{i+1}' for i in range(10000)]
 
 # Create AnnData
 adata = AnnData(
@@ -28,7 +28,7 @@ adata = AnnData(
 )
 
 # Save and visualize
-output_dir = Path('preprocessing/raw_generated00')
+output_dir = Path('data/GSE161529/possible_cancer/generated_15kgenes')
 output_dir.mkdir(parents=True, exist_ok=True)
 np.save(output_dir / 'data.npy', adata.X)
 pd.Series(adata.obs_names).to_csv(output_dir / 'cells.txt', index=False, header=False)
