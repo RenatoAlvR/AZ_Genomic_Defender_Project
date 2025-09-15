@@ -141,6 +141,7 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
         print(f"Saved raw UMAP plot to {output_dir / 'raw_umap.png'}")
         '''
 
+        '''
         # Check if dimensions are transposed (genes as obs, cells as vars)
         expected_cells = 69032  # From barcodes.tsv.gz
         expected_genes = 33538  # From features.tsv.gz
@@ -154,7 +155,7 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
             adata.obs = adata.obs.reindex(adata.obs_names)
             adata.var = adata.var.reindex(adata.var_names)
             print(f"Corrected AnnData shape: {adata.shape}")
-
+        '''
 
         if raw:
             print(f"Going to pass raw data to the model...")

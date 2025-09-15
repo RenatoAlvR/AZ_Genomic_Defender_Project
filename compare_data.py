@@ -6,9 +6,11 @@ import matplotlib.pyplot as plt
 import os
 import json
 import seaborn as sns
-import umap
-
-# --- Utility Functions (largely unchanged) ---
+try:
+    import umap
+except ImportError:
+    print("UMAP not installed. Skipping UMAP plot.")
+    umap = None
 
 def load_dataset(cells_path, data_path, genes_path):
     cells = np.loadtxt(cells_path, dtype=str)
@@ -57,106 +59,19 @@ def compare_distributions(real_dist, gen_dist):
         'wasserstein_distance': float(wass_dist)
     }
 
-# --- Plotting Functions (Modified and New) ---
-
 def plot_comparison_histogram(real_data, gen_data, title, xlabel, ylabel, filepath):
-    """
-    Plots a comparison histogram with a logarithmic Y-axis.
-    """
-    plt.figure(figsize=(8, 6))
-    plt.hist(real_data, bins=50, color='blue', alpha=0.6, label='Real', density=True)
-    plt.hist(gen_data, bins=50, color='orange', alpha=0.6, label='Generated', density=True)
+    plt.figure()
+    combined_data = np.concatenate([real_data, gen_data])
+    bins = np.histogram_bin_edges(combined_data, bins=50)
+    plt.hist(real_data, bins=bins, color='blue', alpha=0.5, label='Real')
+    plt.hist(gen_data, bins=bins, color='orange', alpha=0.5, label='Generated')
     plt.title(title)
     plt.xlabel(xlabel)
-    plt.ylabel(f'{ylabel} (Log Scale)')
-    plt.yscale('log') # MODIFICATION: Use log scale for the Y-axis
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(filepath)
-    plt.close()
-
-def plot_umap_comparison(real_data, gen_data, filepath, n_cells=2000):
-    """
-    Generates and plots a UMAP comparison of real and generated data.
-    """
-    print("Generating UMAP comparison plot...")
-    # Subsample cells for performance and clarity
-    n_real = min(n_cells, real_data.shape[0])
-    n_gen = min(n_cells, gen_data.shape[0])
-    
-    real_indices = np.random.choice(real_data.shape[0], n_real, replace=False)
-    gen_indices = np.random.choice(gen_data.shape[0], n_gen, replace=False)
-    
-    real_subset = real_data[real_indices, :]
-    gen_subset = gen_data[gen_indices, :]
-
-    # Combine data and create labels
-    combined_data = np.vstack([real_subset, gen_subset])
-    labels = ['Real'] * n_real + ['Generated'] * n_gen
-
-    # Run UMAP
-    reducer = umap.UMAP(random_state=42)
-    embedding = reducer.fit_transform(combined_data)
-
-    # Plot
-    plt.figure(figsize=(10, 8))
-    sns.scatterplot(x=embedding[:, 0], y=embedding[:, 1], hue=labels, s=10, alpha=0.7)
-    plt.title('UMAP Projection of Real vs. Generated Cells')
-    plt.xlabel('UMAP 1')
-    plt.ylabel('UMAP 2')
-    plt.legend(title='Dataset')
-    plt.tight_layout()
-    plt.savefig(filepath)
-    plt.close()
-
-def plot_violin_comparison(real_dist, gen_dist, title, ylabel, filepath):
-    """
-    Generates a violin plot comparing two distributions.
-    """
-    print("Generating violin plot...")
-    df_real = pd.DataFrame({'value': real_dist, 'Dataset': 'Real'})
-    df_gen = pd.DataFrame({'value': gen_dist, 'Dataset': 'Generated'})
-    combined_df = pd.concat([df_real, df_gen])
-
-    plt.figure(figsize=(8, 6))
-    sns.violinplot(x='Dataset', y='value', data=combined_df)
-    plt.title(title)
     plt.ylabel(ylabel)
-    plt.xlabel('')
-    plt.tight_layout()
-    plt.savefig(filepath)
-    plt.close()
-
-def plot_correlation_heatmap_comparison(real_data, gen_data, genes, filepath, n_genes=200):
-    """
-    Plots side-by-side gene-gene correlation heatmaps.
-    """
-    print("Generating correlation heatmap comparison...")
-    # Find top N most variable genes from the real data
-    variances = np.var(real_data, axis=0)
-    top_gene_indices = np.argsort(variances)[-n_genes:]
-    
-    # Subset both datasets to these genes
-    real_subset = real_data[:, top_gene_indices]
-    gen_subset = gen_data[:, top_gene_indices]
-    top_genes = genes[top_gene_indices]
-
-    # Calculate correlation matrices
-    corr_real = pd.DataFrame(real_subset, columns=top_genes).T.corr()
-    corr_gen = pd.DataFrame(gen_subset, columns=top_genes).T.corr()
-
-    # Plot
-    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
-    fig.suptitle(f'Gene-Gene Correlation of Top {n_genes} Variable Genes', fontsize=16)
-
-    sns.heatmap(corr_real, ax=axes[0], cmap='viridis', xticklabels=False, yticklabels=False)
-    axes[0].set_title('Real Data')
-
-    sns.heatmap(corr_gen, ax=axes[1], cmap='viridis', xticklabels=False, yticklabels=False)
-    axes[1].set_title('Generated Data')
-
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-    plt.savefig(filepath)
+    plt.yscale('log')
+    plt.grid(True, which="both", ls="--", alpha=0.5)
+    plt.legend()
+    plt.savefig(filepath, bbox_inches='tight')
     plt.close()
 
 def main():
@@ -174,58 +89,57 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Load datasets
-    print("Loading datasets...")
     real_cells, real_genes, real_data = load_dataset(args.real_cells, args.real_data, args.real_genes)
     gen_cells, gen_genes, gen_data = load_dataset(args.gen_cells, args.gen_data, args.gen_genes)
 
-    # Handle gene mismatch
+    # Handle gene mismatch by subsetting if possible
     if not np.array_equal(real_genes, gen_genes):
-        print("Gene lists do not match. Attempting to subset real data...")
-        common_genes = list(set(real_genes) & set(gen_genes))
-        if len(common_genes) > 0:
-            # Create a map for quick index lookup
-            real_gene_map = {gene: i for i, gene in enumerate(real_genes)}
-            gen_gene_map = {gene: i for i, gene in enumerate(gen_genes)}
-            
-            # Get indices for common genes in both datasets
-            real_indices = [real_gene_map[g] for g in common_genes]
-            gen_indices = [gen_gene_map[g] for g in common_genes]
-
-            # Subset data and genes arrays
-            real_data = real_data[:, real_indices]
-            gen_data = gen_data[:, gen_indices]
-            real_genes = np.array(common_genes)
-            gen_genes = np.array(common_genes)
-            print(f"Successfully subsetted both datasets to {len(common_genes)} common genes.")
+        gen_set = set(gen_genes)
+        real_set = set(real_genes)
+        if gen_set.issubset(real_set):
+            gene_map = {g: i for i, g in enumerate(real_genes)}
+            indices = [gene_map[g] for g in gen_genes]
+            real_data = real_data[:, indices]
+            real_genes = gen_genes.copy()  # Now match
+            print("Subsetting real data to match generated genes.")
         else:
-            print("Error: No common genes found between datasets. Cannot proceed with comparison.")
-            return
+            print("Warning: Genes in real and generated datasets do not match and are not a subset. Comparisons may be invalid.")
 
-    # --- Calculations (Unchanged) ---
-    print("Calculating statistics...")
+    # Basic global stats
     global_stats_real = compute_basic_stats(real_data)
     global_stats_gen = compute_basic_stats(gen_data)
+
+    # Per gene stats
     gene_stats_real = compute_per_gene_stats(real_data, real_genes)
     gene_stats_gen = compute_per_gene_stats(gen_data, gen_genes)
+
+    # Per cell stats
     cell_stats_real, lib_real = compute_per_cell_stats(real_data)
     cell_stats_gen, lib_gen = compute_per_cell_stats(gen_data)
+
+    # Sparsity
     sparsity_real = float(np.mean(real_data == 0))
     sparsity_gen = float(np.mean(gen_data == 0))
+
+    # Distribution comparisons
     gene_mean_comp = compare_distributions(gene_stats_real['mean'].values, gene_stats_gen['mean'].values)
     gene_var_comp = compare_distributions(gene_stats_real['var'].values, gene_stats_gen['var'].values)
     gene_zero_comp = compare_distributions(gene_stats_real['zero_frac'].values, gene_stats_gen['zero_frac'].values)
     lib_size_comp = compare_distributions(lib_real, lib_gen)
 
-    # --- Saving Stats (Unchanged) ---
-    print("Saving statistics files...")
+    # Save stats
     with open(os.path.join(args.output_dir, 'global_stats.json'), 'w') as f:
         json.dump({'real': global_stats_real, 'gen': global_stats_gen}, f, indent=4)
+
     gene_stats_real.to_csv(os.path.join(args.output_dir, 'gene_stats_real.csv'), index=False)
     gene_stats_gen.to_csv(os.path.join(args.output_dir, 'gene_stats_gen.csv'), index=False)
+
     with open(os.path.join(args.output_dir, 'cell_stats.json'), 'w') as f:
         json.dump({'real': cell_stats_real, 'gen': cell_stats_gen}, f, indent=4)
+
     with open(os.path.join(args.output_dir, 'sparsity.json'), 'w') as f:
         json.dump({'real': sparsity_real, 'gen': sparsity_gen}, f, indent=4)
+
     with open(os.path.join(args.output_dir, 'distribution_comparisons.json'), 'w') as f:
         json.dump({
             'gene_means': gene_mean_comp,
@@ -234,34 +148,74 @@ def main():
             'lib_sizes': lib_size_comp
         }, f, indent=4)
 
-    # --- Plotting ---
-    print("Generating comparison plots...")
-    # Original Histograms (now with log scale)
+    # Plots
     plot_comparison_histogram(gene_stats_real['mean'].values, gene_stats_gen['mean'].values,
-                              'Gene Means Distribution', 'Mean Expression', 'Density',
+                              'Gene Means Distribution', 'Mean Expression', 'Frequency (Log Scale)',
                               os.path.join(args.output_dir, 'gene_means_hist.png'))
 
     plot_comparison_histogram(gene_stats_real['var'].values, gene_stats_gen['var'].values,
-                              'Gene Variances Distribution', 'Variance', 'Density',
+                              'Gene Variances Distribution', 'Variance', 'Frequency (Log Scale)',
                               os.path.join(args.output_dir, 'gene_vars_hist.png'))
 
     plot_comparison_histogram(gene_stats_real['zero_frac'].values, gene_stats_gen['zero_frac'].values,
-                              'Gene Zero Fractions Distribution', 'Zero Fraction', 'Density',
+                              'Gene Zero Fractions Distribution', 'Zero Fraction', 'Frequency (Log Scale)',
                               os.path.join(args.output_dir, 'gene_zero_fracs_hist.png'))
 
     plot_comparison_histogram(lib_real, lib_gen,
-                              'Library Sizes Distribution', 'Library Size', 'Density',
+                              'Library Sizes Distribution', 'Library Size', 'Frequency (Log Scale)',
                               os.path.join(args.output_dir, 'lib_sizes_hist.png'))
 
-    # NEW: Advanced Comparison Plots
-    plot_umap_comparison(real_data, gen_data,
-                         os.path.join(args.output_dir, 'umap_comparison.png'))
+    # Heatmap comparison
+    sub_cells = 500
+    sub_genes = 50
+    if real_data.shape[0] >= sub_cells and real_data.shape[1] >= sub_genes:
+        var_real = np.var(real_data, axis=0)
+        top_genes_idx = np.argsort(var_real)[-sub_genes:]
+        real_idx = np.random.choice(real_data.shape[0], sub_cells, replace=False)
+        gen_idx = np.random.choice(gen_data.shape[0], sub_cells, replace=False)
+        real_sub = np.log1p(real_data[real_idx][:, top_genes_idx])
+        gen_sub = np.log1p(gen_data[gen_idx][:, top_genes_idx])
+        fig, axs = plt.subplots(1, 2, figsize=(12, 6))
+        sns.heatmap(real_sub, ax=axs[0], cmap='viridis', cbar=False)
+        axs[0].set_title('Real Data Heatmap (subset)')
+        sns.heatmap(gen_sub, ax=axs[1], cmap='viridis', cbar=False)
+        axs[1].set_title('Generated Data Heatmap (subset)')
+        plt.savefig(os.path.join(args.output_dir, 'heatmap_comparison.png'))
+        plt.close()
+    else:
+        print("Data too small for heatmap subsampling.")
 
-    plot_violin_comparison(lib_real, lib_gen, 'Library Size Distribution Comparison', 'Library Size',
-                           os.path.join(args.output_dir, 'lib_sizes_violin.png'))
+    # UMAP comparison
+    if umap:
+        sub_sample = min(5000, min(real_data.shape[0], gen_data.shape[0]))
+        if sub_sample > 0:
+            real_idx = np.random.choice(real_data.shape[0], sub_sample, replace=False)
+            gen_idx = np.random.choice(gen_data.shape[0], sub_sample, replace=False)
+            combined = np.vstack((real_data[real_idx], gen_data[gen_idx]))
+            labels = np.array(['Real'] * sub_sample + ['Generated'] * sub_sample)
+            reducer = umap.UMAP()
+            embedding = reducer.fit_transform(combined)
+            plt.figure(figsize=(8, 6))
+            for label in np.unique(labels):
+                idx = labels == label
+                plt.scatter(embedding[idx, 0], embedding[idx, 1], label=label, alpha=0.5)
+            plt.title('UMAP Comparison')
+            plt.legend()
+            plt.savefig(os.path.join(args.output_dir, 'umap_comparison.png'))
+            plt.close()
+        else:
+            print("Data too small for UMAP subsampling.")
 
-    plot_correlation_heatmap_comparison(real_data, gen_data, real_genes,
-                                         os.path.join(args.output_dir, 'gene_correlation_heatmap.png'))
+    # Violin plot comparison for library sizes
+    plt.figure(figsize=(6, 8))
+    df = pd.DataFrame({
+        'Library Size': np.concatenate((lib_real, lib_gen)),
+        'Dataset': np.array(['Real'] * len(lib_real) + ['Generated'] * len(lib_gen))
+    })
+    sns.violinplot(x='Dataset', y='Library Size', data=df)
+    plt.title('Violin Plot of Library Sizes')
+    plt.savefig(os.path.join(args.output_dir, 'violin_comparison.png'))
+    plt.close()
 
     print(f"Comparison complete. Results saved to {args.output_dir}")
 
