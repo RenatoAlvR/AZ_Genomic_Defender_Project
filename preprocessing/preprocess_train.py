@@ -16,59 +16,83 @@ from typing import Dict, Any, Union
 import scipy.sparse
 
 def save_and_visualize(adata: sc.AnnData, X_pca: np.ndarray, data_dir: Path, dataset_name: str):
-    """Save preprocessed PCA data and generate violin plot for gene distributions.
-    
+    """Save preprocessed PCA data and generate violin plot & UMAP visualization
+    without running into memory issues.
+
     Args:
         adata (sc.AnnData): AnnData object with cell and gene names.
-        X_pca (np.ndarray): PCA-reduced data (n_cells, input_dim).
+        X_pca (np.ndarray or sparse matrix): PCA-reduced data (n_cells, input_dim).
         data_dir (Path): Original dataset directory.
         dataset_name (str): Name of the dataset (e.g., 'end_data').
     """
     # Create output directory
-    output_dir = Path('preprocessing') / dataset_name
+    output_dir = Path("preprocessing") / dataset_name
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Save PCA data, cell names, and gene names
-    np.save(output_dir / 'data.npy', X_pca)
-    pd.Series(adata.obs_names).to_csv(output_dir / 'cells.txt', index=False, header=False)
-    pd.Series(adata.var_names[:X_pca.shape[1]]).to_csv(output_dir / 'genes.txt', index=False, header=False)
+    np.save(output_dir / "data.npy", X_pca if not scipy.sparse.issparse(X_pca) else X_pca.toarray())
+    pd.Series(adata.obs_names).to_csv(output_dir / "cells.txt", index=False, header=False)
+    pd.Series(adata.var_names[:X_pca.shape[1]]).to_csv(output_dir / "genes.txt", index=False, header=False)
     print(f"Saved preprocessed data to {output_dir / 'data.npy'}")
-    
-    # Generate violin plot for top 10 variable genes
-    variances = np.var(X_pca, axis=0)
+
+    # --- Violin Plot ---
+    # Use a subset of cells for plotting (avoid memory explosion)
+    n_violin_samples = 5000
+    if X_pca.shape[0] > n_violin_samples:
+        idx_violin = np.random.choice(X_pca.shape[0], n_violin_samples, replace=False)
+        X_violin = X_pca[idx_violin]
+        adata_violin = adata[idx_violin]
+    else:
+        X_violin = X_pca
+        adata_violin = adata
+
+    if scipy.sparse.issparse(X_violin):
+        X_violin = X_violin.toarray()
+
+    # Select top variable genes
+    variances = np.var(X_violin, axis=0)
     top_genes_idx = np.argsort(variances)[-10:]
-    top_genes = adata.var_names[top_genes_idx]
-    
-    # Convert to DataFrame for visualization
-    df = pd.DataFrame(X_pca[:, top_genes_idx], columns=top_genes)
-    df_melt = df.melt(var_name='Gene', value_name='Expression')
-    
+    top_genes = adata_violin.var_names[top_genes_idx]
+
+    # Convert to DataFrame for violin plot
+    df = pd.DataFrame(X_violin[:, top_genes_idx], columns=top_genes)
+    df_melt = df.melt(var_name="Gene", value_name="Expression")
+
     # Create violin plot
     plt.figure(figsize=(12, 6))
-    sns.violinplot(x='Gene', y='Expression', data=df_melt, inner='quartile')
-    plt.title(f'Gene Expression Distributions - {dataset_name}')
+    sns.violinplot(x="Gene", y="Expression", data=df_melt, inner="quartile")
+    plt.title(f"Gene Expression Distributions - {dataset_name}")
     plt.xticks(rotation=45)
     plt.tight_layout()
-    
-    # Save plot
-    plot_path = output_dir / 'gene_distributions.png'
-    plt.savefig(plot_path, dpi=300)
+    plt.savefig(output_dir / "gene_distributions.png", dpi=300)
     plt.close()
-    print(f"Saved gene distribution plot to {plot_path}")
+    print(f"Saved gene distribution plot to {output_dir / 'gene_distributions.png'}")
 
-    # UMAP visualization
-    umap_embedding = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=42).fit_transform(X_pca)
+    # --- UMAP ---
+    # Subsample for UMAP (visualization only)
+    n_umap_samples = 20000
+    if X_pca.shape[0] > n_umap_samples:
+        idx_umap = np.random.choice(X_pca.shape[0], n_umap_samples, replace=False)
+        X_umap = X_pca[idx_umap]
+    else:
+        X_umap = X_pca
+
+    if scipy.sparse.issparse(X_umap):
+        X_umap = X_umap.toarray()
+
+    reducer = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=42)
+    umap_embedding = reducer.fit_transform(X_umap)
+
     plt.figure(figsize=(10, 8))
     plt.scatter(umap_embedding[:, 0], umap_embedding[:, 1], s=10, alpha=0.5)
-    plt.title(f'UMAP of {dataset_name}')
-    plt.xlabel('UMAP 1')
-    plt.ylabel('UMAP 2')
+    plt.title(f"UMAP of {dataset_name}")
+    plt.xlabel("UMAP 1")
+    plt.ylabel("UMAP 2")
     plt.tight_layout()
-
-    # Save UMAP visualization
-    plt.savefig(output_dir / 'umap.png', dpi=300)
+    plt.savefig(output_dir / "umap.png", dpi=300)
     plt.close()
     print(f"Saved UMAP plot to {output_dir / 'umap.png'}")
+
     
 def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray, Data]:
     """Preprocess 10x Genomics data for training.
@@ -160,7 +184,7 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
         if raw:
             print(f"Going to pass raw data to the model...")
             # Use raw data, limit to input_dim features if necessary
-            X = adata.X[:, :input_dim].toarray() if scipy.sparse.issparse(adata.X) else adata.X[:, :input_dim]
+            X = adata.X[:, :input_dim]   # keep as sparse if already sparse
         else:
             print(f"Processsing data for the model...")
             # Process in batches if dataset is large
@@ -187,6 +211,9 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray,
         # Save preprocessed data and visualize
         save_and_visualize(adata, X, data_dir, dataset_name)
     
+    if scipy.sparse.issparse(X):
+        X = X.toarray()
+
     # Convert to PyTorch tensor
     X_torch = torch.tensor(X, dtype=torch.float32)
     labels_torch = None
