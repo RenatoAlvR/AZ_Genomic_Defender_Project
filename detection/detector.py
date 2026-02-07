@@ -1,6 +1,11 @@
+"""
+GenomeDefender Detection Module.
+
+Performs anomaly detection on scRNA-seq data using trained models.
+"""
+
 import torch
 import yaml
-import logging
 import numpy as np
 from pathlib import Path
 from typing import Dict
@@ -10,9 +15,12 @@ from models.vae_model import VariationalAutoencoder
 from models.gnn_model import GNNAutoencoder
 from models.ddpm_model import DenoisingDiffusionPM
 from utils.report import ReportGenerator
+from utils.logger import get_logger, log_detection_stats, AuditTrail
+from utils.metrics import AnomalyMetrics
 import scanpy as sc
 import matplotlib.pyplot as plt
 import umap
+
 
 def detect(config_path: str, dataset_path: str, model_name: str, output_path: str, 
            weights_path: str, threshold: float = None, generate_report: bool = True) -> None:
@@ -27,14 +35,17 @@ def detect(config_path: str, dataset_path: str, model_name: str, output_path: st
         threshold: Detection threshold (quantile, 0-1). If None, uses config value.
         generate_report: If True, generates human-readable and JSON reports
     """
+    logger = get_logger()
+    audit = AuditTrail()
+    
     # Load configuration
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     
-    logging.info(f"Loaded config: {config}")
+    logger.info(f"Loaded configuration from {config_path}")
 
     # Preprocess data
-    logging.info(f"Preprocessing data from {dataset_path}")
+    logger.info(f"Preprocessing data from {dataset_path}")
     adata, model_input, pca = preprocess_detect(dataset_path, config)
     
     # Initialize model and load weights
@@ -50,8 +61,10 @@ def detect(config_path: str, dataset_path: str, model_name: str, output_path: st
     else:
         raise ValueError(f"Unsupported model: {model_name}. Choose 'cae', 'vae', 'gnn_ae', or 'ddpm'.")
     
+    logger.info(f"Loaded {model_name.upper()} weights from {weights_path}")
+    
     # Detect anomalies
-    logging.info(f"Detecting anomalies with {model_name}")
+    logger.info(f"Computing anomaly scores...")
     anomaly_scores = model.detect(model_input)
     
     # Get reconstructions for per-gene analysis
@@ -69,7 +82,25 @@ def detect(config_path: str, dataset_path: str, model_name: str, output_path: st
     # Threshold for anomalies (CLI arg overrides config)
     if threshold is None:
         threshold = config.get('detection_threshold', 0.95)
+    
+    # Calculate metrics using AnomalyMetrics
+    metrics = AnomalyMetrics.calculate_binary_metrics(
+        scores=anomaly_scores,
+        labels=None,  # No ground truth available in real detection
+        threshold=np.quantile(anomaly_scores, threshold),
+        contamination=1 - threshold
+    )
+    
     anomaly_indices = np.where(anomaly_scores >= np.quantile(anomaly_scores, threshold))[0]
+    
+    # Log detection statistics
+    log_detection_stats(
+        logger=logger,
+        total_cells=len(anomaly_scores),
+        poisoned_cells=len(anomaly_indices),
+        threshold=threshold,
+        model_name=model_name
+    )
     
     # Label cells: 0 healthy, 1 poisoned
     adata.obs['is_poisoned'] = 0
@@ -78,7 +109,7 @@ def detect(config_path: str, dataset_path: str, model_name: str, output_path: st
     # Save labels
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     adata.obs[['is_poisoned']].to_csv(f"{output_path}_labels.csv")
-    logging.info(f"Cell labels saved to {output_path}_labels.csv")
+    logger.info(f"Cell labels saved to {output_path}_labels.csv")
     
     # Collect poisoned cells details (cell name and poisoned genes)
     poisoned_cells = {}
@@ -100,7 +131,15 @@ def detect(config_path: str, dataset_path: str, model_name: str, output_path: st
         for cell, genes in poisoned_cells.items():
             f.write(f"{cell}: {', '.join(genes)}\n")
     
-    logging.info(f"Poisoned cells details saved to {poisoned_file}")
+    logger.info(f"Poisoned cells details saved to {poisoned_file}")
+    
+    # Log to audit trail
+    audit.log_detection(
+        model=model_name,
+        dataset=dataset_path,
+        poisoned_count=len(anomaly_indices),
+        total_count=len(anomaly_scores)
+    )
     
     # Generate reports if requested
     if generate_report:
@@ -115,8 +154,12 @@ def detect(config_path: str, dataset_path: str, model_name: str, output_path: st
         report_gen.print_summary()
         report_gen.export_text(f"{output_path}_report.txt")
         report_gen.export_json(f"{output_path}_report.json")
+        
+        # Add metrics to JSON report
+        logger.info(f"Score statistics: mean={metrics['score_stats']['mean']:.4f}, std={metrics['score_stats']['std']:.4f}")
     
     # Generate UMAP colored by labels
+    logger.info("Generating UMAP visualization...")
     reducer = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=42)
     umap_embedding = reducer.fit_transform(adata.obsm['X_pca'])
     plt.figure(figsize=(10, 8))
@@ -129,8 +172,8 @@ def detect(config_path: str, dataset_path: str, model_name: str, output_path: st
     umap_path = f"{output_path}_umap_poison.png"
     plt.savefig(umap_path, dpi=300)
     plt.close()
-    logging.info(f"UMAP plot saved to {umap_path}")
+    logger.info(f"UMAP plot saved to {umap_path}")
     
     # Save anomaly scores
     np.savetxt(output_path, anomaly_scores, delimiter=',')
-    logging.info(f"Anomaly scores saved to {output_path}")
+    logger.info(f"Anomaly scores saved to {output_path}")

@@ -1,124 +1,19 @@
+"""
+GenomeDefender Logging Utilities.
+
+Provides colored console output and JSON file logging with audit trails.
+"""
+
 import logging
 from pathlib import Path
-from typing import Dict, Any
-import yaml
-import sys
+from typing import Dict, Any, Optional
 import json
 import numpy as np
 from datetime import datetime
 
-class GenomeGuardianLogger:
-    """
-    Centralized logging system for:
-    - Console output (colored)
-    - File logging (persistent)
-    - Performance metric tracking
-    - Audit trails for model updates
-    """
-    
-    def __init__(self, config_path: str = 'config.yaml'):
-        self.config = self._load_config(config_path)
-        self.log_dir = Path(self.config.get('log_dir', 'logs'))
-        self._setup_logger()
-        self.metric_history = []
-
-    def _setup_logger(self) -> None:
-        """Initialize multi-handler logging."""
-        self.log_dir.mkdir(exist_ok=True)
-        
-        # Main logger
-        self.logger = logging.getLogger('genome_guardian')
-        self.logger.setLevel(self.config['log_level'])
-        
-        # Clean old log files (keep N most recent)
-        self._rotate_logs()
-        
-        # File handler (JSON format for parsing)
-        log_file = self.log_dir / f"guardian_{datetime.now().strftime('%Y%m%d_%H%M')}.log"
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(JsonFormatter())
-        
-        # Console handler (colored)
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(ColorFormatter())
-        
-        # Add handlers
-        self.logger.addHandler(file_handler)
-        self.logger.addHandler(console_handler)
-        
-        # Audit trail setup
-        if self.config['audit_log']:
-            self.audit_log = self.log_dir / "audit_trail.ndjson"
-            self._log_audit_event('system', 'logger_initialized')
-
-    def _rotate_logs(self) -> None:
-        """Keep only N most recent log files."""
-        log_files = sorted(self.log_dir.glob('guardian_*.log'))
-        for old_log in log_files[:-self.config['max_files']]:
-            old_log.unlink()
-
-    def _log_audit_event(self, event_type: str, message: str, metadata: dict = {}) -> None:
-        """Write structured audit log entry."""
-        entry = {
-            'timestamp': datetime.utcnow().isoformat(),
-            'event': event_type,
-            'message': message,
-            **metadata
-        }
-        with open(self.audit_log, 'a') as f:
-            f.write(json.dumps(entry) + '\n')
-
-    def log_metrics(self, 
-                   model_name: str, 
-                   metrics: Dict[str, float], 
-                   dataset: str = 'validation') -> None:
-        """Record model performance metrics."""
-        entry = {
-            'timestamp': datetime.utcnow().isoformat(),
-            'model': model_name,
-            'dataset': dataset,
-            **metrics
-        }
-        self.metric_history.append(entry)
-        self._log_audit_event('metrics', f"{model_name} performance", metrics)
-        self.logger.info(f"Metrics recorded for {model_name}")
-
-    def log_training_update(self,
-                          model_name: str,
-                          incremental: bool,
-                          samples: int,
-                          duration: float) -> None:
-        """Log model training events."""
-        event = 'incremental_update' if incremental else 'full_retrain'
-        metadata = {
-            'model': model_name,
-            'samples': samples,
-            'duration_sec': round(duration, 2)
-        }
-        self._log_audit_event('training', event, metadata)
-        self.logger.info(
-            f"{model_name} {'updated' if incremental else 'retrained'} "
-            f"with {samples} samples (took {duration:.2f}s)"
-        )
-
-    def log_anomaly_stats(self, 
-                         scores: np.ndarray, 
-                         threshold: float) -> None:
-        """Log detection statistics."""
-        n_anomalies = np.sum(scores > threshold)
-        stats = {
-            'total_samples': len(scores),
-            'anomalies': int(n_anomalies),
-            'rate': float(n_anomalies / len(scores))
-        }
-        self._log_audit_event('detection', 'anomaly_stats', stats)
-        self.logger.info(
-            f"Detection stats - Anomalies: {n_anomalies}/{len(scores)} "
-            f"({stats['rate']:.2%})"
-        )
 
 class JsonFormatter(logging.Formatter):
-    """Structured JSON logging for files."""
+    """Structured JSON logging for log files."""
     def format(self, record):
         log_entry = {
             'timestamp': datetime.utcnow().isoformat(),
@@ -129,20 +24,133 @@ class JsonFormatter(logging.Formatter):
         }
         return json.dumps(log_entry)
 
+
 class ColorFormatter(logging.Formatter):
-    """Colored console output."""
+    """Colored console output for better readability."""
     COLORS = {
-        'WARNING': '\033[93m',  # Yellow
-        'ERROR': '\033[91m',    # Red
-        'CRITICAL': '\033[91m',
-        'INFO': '\033[92m',     # Green
-        'DEBUG': '\033[94m'     # Blue
+        'WARNING': '\033[93m',   # Yellow
+        'ERROR': '\033[91m',     # Red
+        'CRITICAL': '\033[91m',  # Red
+        'INFO': '\033[92m',      # Green
+        'DEBUG': '\033[94m'      # Blue
     }
+    RESET = '\033[0m'
     
     def format(self, record):
         color = self.COLORS.get(record.levelname, '')
-        reset = '\033[0m'
-        return f"{color}[{record.levelname}] {record.getMessage()}{reset}"
+        timestamp = datetime.now().strftime('%H:%M:%S')
+        return f"{color}[{timestamp}] [{record.levelname}] {record.getMessage()}{self.RESET}"
 
-# Singleton logger instance
-logger = GenomeGuardianLogger()
+
+def setup_logging(
+    log_level: str = 'INFO',
+    log_dir: str = 'logs',
+    log_name: str = 'genome_defender'
+) -> logging.Logger:
+    """
+    Set up logging with colored console output and JSON file logging.
+    
+    Args:
+        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        log_dir: Directory for log files
+        log_name: Base name for log files
+        
+    Returns:
+        Configured logger instance
+    """
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+    
+    # Create logger
+    logger = logging.getLogger('genome_defender')
+    logger.setLevel(getattr(logging, log_level.upper()))
+    
+    # Prevent duplicate handlers if called multiple times
+    if logger.handlers:
+        return logger
+    
+    # File handler (JSON format)
+    log_file = log_path / f"{log_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(JsonFormatter())
+    file_handler.setLevel(logging.DEBUG)
+    
+    # Console handler (colored)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(ColorFormatter())
+    console_handler.setLevel(getattr(logging, log_level.upper()))
+    
+    # Add handlers
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+
+def get_logger() -> logging.Logger:
+    """Get the GenomeDefender logger instance."""
+    return logging.getLogger('genome_defender')
+
+
+def log_detection_stats(
+    logger: logging.Logger,
+    total_cells: int,
+    poisoned_cells: int,
+    threshold: float,
+    model_name: str
+) -> None:
+    """Log detection statistics in a formatted way."""
+    rate = (poisoned_cells / total_cells) * 100 if total_cells > 0 else 0
+    logger.info(f"Detection complete using {model_name.upper()}")
+    logger.info(f"  Total cells analyzed: {total_cells:,}")
+    logger.info(f"  Poisoned cells found: {poisoned_cells:,} ({rate:.2f}%)")
+    logger.info(f"  Detection threshold: {threshold}")
+
+
+def log_training_progress(
+    logger: logging.Logger,
+    epoch: int,
+    total_epochs: int,
+    loss: float,
+    model_name: str
+) -> None:
+    """Log training progress."""
+    logger.info(f"[{model_name.upper()}] Epoch {epoch}/{total_epochs} - Loss: {loss:.6f}")
+
+
+class AuditTrail:
+    """Records audit events for compliance and debugging."""
+    
+    def __init__(self, log_dir: str = 'logs'):
+        self.audit_file = Path(log_dir) / 'audit_trail.ndjson'
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+    
+    def log_event(self, event_type: str, message: str, metadata: Dict[str, Any] = None) -> None:
+        """Log an audit event to the audit trail file."""
+        entry = {
+            'timestamp': datetime.utcnow().isoformat(),
+            'event_type': event_type,
+            'message': message,
+            'metadata': metadata or {}
+        }
+        with open(self.audit_file, 'a') as f:
+            f.write(json.dumps(entry) + '\n')
+    
+    def log_detection(self, model: str, dataset: str, poisoned_count: int, total_count: int) -> None:
+        """Log a detection run."""
+        self.log_event('detection', f'Detection run with {model}', {
+            'model': model,
+            'dataset': dataset,
+            'poisoned_count': poisoned_count,
+            'total_count': total_count,
+            'poisoning_rate': poisoned_count / total_count if total_count > 0 else 0
+        })
+    
+    def log_training(self, model: str, dataset: str, epochs: int, final_loss: float) -> None:
+        """Log a training run."""
+        self.log_event('training', f'Training {model}', {
+            'model': model,
+            'dataset': dataset,
+            'epochs': epochs,
+            'final_loss': final_loss
+        })
