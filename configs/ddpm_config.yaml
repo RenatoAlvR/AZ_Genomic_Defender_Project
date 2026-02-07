@@ -4,9 +4,16 @@ num_timesteps: 1000
 beta_schedule: linear
 beta_start: 0.0001
 beta_end: 0.02
+denoiser_type: mlp  # 'unet' or 'mlp' - MLP may better preserve topology
+# UNet options
 unet_model_channels: 128
 unet_time_emb_dim: 128
 unet_dropout: 0.1
+# MLP options (used when denoiser_type: mlp)
+mlp_hidden_dim: 512
+mlp_num_layers: 4
+mlp_time_emb_dim: 128
+mlp_dropout: 0.1
 detection_timestep: 500
 generation_timestep: 200
 device: cuda

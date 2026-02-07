@@ -47,6 +47,10 @@ def main():
                         help='Path to model weights file for detection (e.g., weights/cae_finetuned_june.pt). Used only in detect mode.')
     parser.add_argument('--incremental', action='store_true',
                         help='Enable incremental training (load pre-trained weights)')
+    parser.add_argument('--threshold', type=float, default=None,
+                        help='Detection threshold (0-1 quantile). Overrides config value. Default: 0.95')
+    parser.add_argument('--no-report', action='store_true',
+                        help='Skip generation of human-readable and JSON reports')
     parser.add_argument('--log_level', type=str, default='INFO',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                         help='Logging level')
@@ -94,7 +98,15 @@ def main():
         logging.info("Training completed successfully")
     elif args.mode == 'detect':
         logging.info(f"Starting detection for {args.model} on {args.dataset} using weights {args.weights}")
-        detect(args.config, args.dataset, args.model, args.output, args.weights)
+        detect(
+            config_path=args.config,
+            dataset_path=args.dataset,
+            model_name=args.model,
+            output_path=args.output,
+            weights_path=args.weights,
+            threshold=args.threshold,
+            generate_report=not getattr(args, 'no_report', False)
+        )
         logging.info("Detection completed successfully")
 
 if __name__ == '__main__':

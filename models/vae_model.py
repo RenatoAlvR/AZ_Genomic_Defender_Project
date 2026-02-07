@@ -223,6 +223,21 @@ class VariationalAutoencoder(nn.Module):
             recon_error = torch.mean((outputs['recon'] - x_tensor) ** 2, dim=1)
         return recon_error.cpu().numpy()
 
+    def reconstruct(self, x: np.ndarray) -> np.ndarray:
+        """Reconstruct input data.
+        
+        Args:
+            x: Input data (shape: [n_samples, input_dim])
+            
+        Returns:
+            Reconstructed data (shape: [n_samples, input_dim])
+        """
+        self.eval()
+        x_tensor = torch.tensor(x, dtype=torch.float32, device=self.device)
+        with torch.no_grad():
+            outputs = self(x_tensor)
+        return outputs['recon'].cpu().numpy()
+
     def save(self, path: str) -> None:
         """Save model state and configuration."""
         Path(path).parent.mkdir(parents=True, exist_ok=True)

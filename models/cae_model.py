@@ -270,6 +270,22 @@ class ContrastiveAutoencoder(nn.Module):
             combined_scores = 0.5 * scores + 0.5 * cls_scores  # Combine anomaly and classification scores
         return combined_scores.cpu().numpy()
 
+    def reconstruct(self, X: np.ndarray) -> np.ndarray:
+        """
+        Reconstruct input data.
+
+        Args:
+            X: Input data (shape: [n_samples, input_dim])
+
+        Returns:
+            Reconstructed data (shape: [n_samples, input_dim])
+        """
+        self.eval()
+        with torch.no_grad():
+            X_tensor = torch.tensor(X, dtype=torch.float32, device=self.device)
+            outputs = self(X_tensor)
+        return outputs['recon'].cpu().numpy()
+
     def save(self, path: str):
         """
         Save model state and configuration.

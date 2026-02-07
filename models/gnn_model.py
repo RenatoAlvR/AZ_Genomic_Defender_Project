@@ -107,8 +107,8 @@ class GNNAutoencoder(nn.Module):
         loss = self.loss_weight_recon * recon_loss
         if labels is not None:
             labels = labels.to(self.device)
-            logits = self.classifier(outputs['z'].mean(dim=1))  # Mean pooling for graph-level classification
-            cls_loss = F.binary_cross_entropy_with_logits(logits.squeeze(-1), labels.float())
+            logits = self.classifier(outputs['latent'].mean(dim=0, keepdim=True))  # Mean pooling for graph-level classification
+            cls_loss = F.binary_cross_entropy_with_logits(logits.squeeze(-1), labels.float().mean(keepdim=True))
             loss += cls_loss  # Combine reconstruction and classification loss
         return loss
 
@@ -156,6 +156,17 @@ class GNNAutoencoder(nn.Module):
             outputs = self(x, edge_index)
             recon_error = torch.mean((outputs['recon'] - x) ** 2, dim=1)
         return recon_error.cpu().numpy()
+    
+    def reconstruct(self, graph_data) -> torch.Tensor:
+        """ Returns the raw reconstructed features (not the error). """
+        self.eval()
+        x = graph_data.x.to(self.device)
+        edge_index = graph_data.edge_index.to(self.device)
+
+        with torch.no_grad():
+            outputs = self(x, edge_index)
+        
+        return outputs['recon'] # Return the tensor, not the error
 
     def save(self, path: str) -> None:
         """Save model state and configuration."""

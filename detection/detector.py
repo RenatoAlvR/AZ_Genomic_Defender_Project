@@ -9,12 +9,24 @@ from models.cae_model import ContrastiveAutoencoder
 from models.vae_model import VariationalAutoencoder
 from models.gnn_model import GNNAutoencoder
 from models.ddpm_model import DenoisingDiffusionPM
+from utils.report import ReportGenerator
 import scanpy as sc
 import matplotlib.pyplot as plt
 import umap
 
-def detect(config_path: str, dataset_path: str, model_name: str, output_path: str, weights_path: str) -> None:
-    """Detect anomalies in scRNA-seq data using a trained model."""
+def detect(config_path: str, dataset_path: str, model_name: str, output_path: str, 
+           weights_path: str, threshold: float = None, generate_report: bool = True) -> None:
+    """Detect anomalies in scRNA-seq data using a trained model.
+    
+    Args:
+        config_path: Path to model configuration YAML file
+        dataset_path: Path to dataset directory (10x format)
+        model_name: Model type ('cae', 'vae', 'gnn_ae', 'ddpm')
+        output_path: Base path for output files
+        weights_path: Path to trained model weights
+        threshold: Detection threshold (quantile, 0-1). If None, uses config value.
+        generate_report: If True, generates human-readable and JSON reports
+    """
     # Load configuration
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
@@ -54,8 +66,9 @@ def detect(config_path: str, dataset_path: str, model_name: str, output_path: st
     else:
         input_np = model_input
     
-    # Threshold for anomalies
-    threshold = config.get('detection_threshold', 0.95)
+    # Threshold for anomalies (CLI arg overrides config)
+    if threshold is None:
+        threshold = config.get('detection_threshold', 0.95)
     anomaly_indices = np.where(anomaly_scores >= np.quantile(anomaly_scores, threshold))[0]
     
     # Label cells: 0 healthy, 1 poisoned
@@ -67,23 +80,41 @@ def detect(config_path: str, dataset_path: str, model_name: str, output_path: st
     adata.obs[['is_poisoned']].to_csv(f"{output_path}_labels.csv")
     logging.info(f"Cell labels saved to {output_path}_labels.csv")
     
-    # Save poisoned cells details (cell name and poisoned genes)
+    # Collect poisoned cells details (cell name and poisoned genes)
+    poisoned_cells = {}
+    for idx in anomaly_indices:
+        cell = adata.obs_names[idx]
+        e = input_np[idx] - recon_np[idx]
+        delta_gene = e @ pca.components_
+        abs_delta = np.abs(delta_gene)
+        mean_delta = np.mean(abs_delta)
+        std_delta = np.std(abs_delta)
+        gene_thresh = mean_delta + 3 * std_delta
+        poisoned_gene_idx = np.where(abs_delta > gene_thresh)[0]
+        poisoned_genes = adata.var_names[poisoned_gene_idx].tolist()
+        poisoned_cells[cell] = poisoned_genes
+    
+    # Write poisoned cells file
     poisoned_file = f"{output_path}_poisoned.txt"
     with open(poisoned_file, 'w') as f:
-        for idx in anomaly_indices:
-            cell = adata.obs_names[idx]
-            e = input_np[idx] - recon_np[idx]
-            delta_gene = e @ pca.components_
-            abs_delta = np.abs(delta_gene)
-            mean_delta = np.mean(abs_delta)
-            std_delta = np.std(abs_delta)
-            gene_thresh = mean_delta + 3 * std_delta
-            poisoned_gene_idx = np.where(abs_delta > gene_thresh)[0]
-            poisoned_genes = adata.var_names[poisoned_gene_idx].tolist()
-            f.write(f"{cell}: {', '.join(poisoned_genes)}\n")
+        for cell, genes in poisoned_cells.items():
+            f.write(f"{cell}: {', '.join(genes)}\n")
     
     logging.info(f"Poisoned cells details saved to {poisoned_file}")
-    print(f"Poisoned cells details saved to {poisoned_file}")
+    
+    # Generate reports if requested
+    if generate_report:
+        report_gen = ReportGenerator(
+            model_name=model_name,
+            dataset_path=dataset_path,
+            anomaly_scores=anomaly_scores,
+            threshold=threshold,
+            adata=adata,
+            poisoned_cells=poisoned_cells
+        )
+        report_gen.print_summary()
+        report_gen.export_text(f"{output_path}_report.txt")
+        report_gen.export_json(f"{output_path}_report.json")
     
     # Generate UMAP colored by labels
     reducer = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=42)

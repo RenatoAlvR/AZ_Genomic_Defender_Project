@@ -84,8 +84,85 @@ class UNet1D(nn.Module):
         out = self.final_conv(h)
         return out.squeeze(1)
 
+
+class MLPDenoiser(nn.Module):
+    """MLP-based denoiser for DDPM - alternative to UNet1D.
+    
+    May better preserve data topology for synthetic data generation
+    compared to convolutional architectures.
+    """
+    def __init__(self, input_dim: int, hidden_dim: int = 512, num_layers: int = 4, 
+                 time_emb_dim: int = 128, dropout: float = 0.1):
+        super().__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        
+        # Time embedding
+        self.time_mlp = nn.Sequential(
+            SinusoidalPosEmb(time_emb_dim),
+            nn.Linear(time_emb_dim, time_emb_dim * 2),
+            nn.SiLU(),
+            nn.Linear(time_emb_dim * 2, time_emb_dim),
+            nn.SiLU()
+        )
+        
+        # Input projection
+        self.input_proj = nn.Linear(input_dim, hidden_dim)
+        
+        # Time conditioning layers
+        self.time_projs = nn.ModuleList([
+            nn.Linear(time_emb_dim, hidden_dim) for _ in range(num_layers)
+        ])
+        
+        # Main MLP layers with residual connections
+        self.layers = nn.ModuleList()
+        for i in range(num_layers):
+            self.layers.append(nn.Sequential(
+                nn.LayerNorm(hidden_dim),
+                nn.Linear(hidden_dim, hidden_dim * 2),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim * 2, hidden_dim),
+                nn.Dropout(dropout)
+            ))
+        
+        # Output projection
+        self.output_proj = nn.Sequential(
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, input_dim)
+        )
+    
+    def forward(self, x: torch.Tensor, time: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor (shape: [batch_size, input_dim])
+            time: Timestep tensor (shape: [batch_size])
+        
+        Returns:
+            Predicted noise (shape: [batch_size, input_dim])
+        """
+        # Time embedding
+        t_emb = self.time_mlp(time)
+        
+        # Input projection
+        h = self.input_proj(x)
+        
+        # Process through layers with time conditioning and residual connections
+        for i, layer in enumerate(self.layers):
+            # Add time conditioning
+            h = h + self.time_projs[i](t_emb)
+            # Residual connection
+            h = h + layer(h)
+        
+        # Output projection
+        return self.output_proj(h)
+
+
 class DenoisingDiffusionPM(nn.Module):
-    """Denoising Diffusion Probabilistic Model for detecting injected biological noise."""
+    """Denoising Diffusion Probabilistic Model for detecting injected biological noise.
+    
+    Also supports synthetic data generation for creating poisoned datasets.
+    """
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__()
 
@@ -95,23 +172,41 @@ class DenoisingDiffusionPM(nn.Module):
             'beta_schedule': 'linear',
             'beta_start': 0.0001,
             'beta_end': 0.02,
+            'denoiser_type': 'unet',  # 'unet' or 'mlp'
             'unet_model_channels': 64,
             'unet_time_emb_dim': 64,
             'unet_dropout': 0.1,
+            'mlp_hidden_dim': 512,
+            'mlp_num_layers': 4,
+            'mlp_time_emb_dim': 128,
+            'mlp_dropout': 0.1,
             'detection_timestep': 500,  # Timestep for detection
-            'generation_timestep': 0,   #Timestep to stop generation (0 for clean data)
+            'generation_timestep': 0,   # Timestep to stop generation (0 for clean data)
             'device': 'cuda' if torch.cuda.is_available() else 'cpu'
         }
         self.config = {**default_config, **(config or {})}
 
         self._validate_config()
 
-        self.model = UNet1D(
-            input_dim=self.config['input_dim'],
-            model_channels=self.config['unet_model_channels'],
-            time_emb_dim=self.config['unet_time_emb_dim'],
-            dropout=self.config['unet_dropout']
-        )
+        # Select denoiser type
+        denoiser_type = self.config.get('denoiser_type', 'unet').lower()
+        if denoiser_type == 'mlp':
+            self.model = MLPDenoiser(
+                input_dim=self.config['input_dim'],
+                hidden_dim=self.config.get('mlp_hidden_dim', 512),
+                num_layers=self.config.get('mlp_num_layers', 4),
+                time_emb_dim=self.config.get('mlp_time_emb_dim', 128),
+                dropout=self.config.get('mlp_dropout', 0.1)
+            )
+            print(f"Using MLP denoiser with hidden_dim={self.config.get('mlp_hidden_dim', 512)}, num_layers={self.config.get('mlp_num_layers', 4)}")
+        else:
+            self.model = UNet1D(
+                input_dim=self.config['input_dim'],
+                model_channels=self.config['unet_model_channels'],
+                time_emb_dim=self.config['unet_time_emb_dim'],
+                dropout=self.config['unet_dropout']
+            )
+            print(f"Using UNet1D denoiser with model_channels={self.config['unet_model_channels']}")
 
         self.num_timesteps = self.config['num_timesteps']
         self.detection_timestep = self.config['detection_timestep']
@@ -306,6 +401,26 @@ class DenoisingDiffusionPM(nn.Module):
             x_0_pred = self.predict_start_from_noise(x_t, t, predicted_noise)
             anomaly_score = torch.mean((x_tensor - x_0_pred) ** 2, dim=1)
         return anomaly_score.cpu().numpy()
+
+    def reconstruct(self, x: np.ndarray) -> np.ndarray:
+        """Reconstruct input data using denoising.
+        
+        Args:
+            x: Input data (shape: [n_samples, input_dim])
+            
+        Returns:
+            Reconstructed data (shape: [n_samples, input_dim])
+        """
+        self.eval()
+        x_tensor = torch.tensor(x, dtype=torch.float32, device=self.config['device'])
+        batch_size = x_tensor.shape[0]
+        t = torch.full((batch_size,), self.detection_timestep, device=self.config['device'], dtype=torch.long)
+
+        with torch.no_grad():
+            x_t = self.q_sample(x_start=x_tensor, t=t)
+            predicted_noise = self.model(x_t, t)
+            x_0_pred = self.predict_start_from_noise(x_t, t, predicted_noise)
+        return x_0_pred.cpu().numpy()
 
     def save(self, path: str) -> None:
         """Save DDPM model state and configuration."""
