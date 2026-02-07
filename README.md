@@ -4,134 +4,158 @@
 
 GenomeDefender uses specialized AI models to detect different types of data poisoning attacks that may compromise the integrity of scRNA-seq data used in genomics research and clinical applications.
 
+---
+
+## Training Philosophy
+
+> **Train on ALL legitimate biological states. Flag only artificial manipulation.**
+
+The correct approach for data poisoning detection:
+
+| Approach | What Gets Flagged | Use Case |
+|----------|------------------|----------|
+| ❌ Train on healthy only | Cancer + poisoning | Cell type classification (not this tool) |
+| ✅ Train on healthy + cancer + neoplastic | Only artificial manipulation | **Data poisoning detection** |
+
+By training on the full biological spectrum, anomalies represent truly synthetic/corrupted data—not legitimate biological variation.
+
+---
+
 ## Attack Types & Models
 
 | Attack Type | Model | Description |
 |-------------|-------|-------------|
-| Synthetic Cell Injection | **CAE** (Contrastive Autoencoder) | Detects artificially generated cells inserted into datasets |
+| Synthetic Cell Injection | **CAE** (Contrastive Autoencoder) | Detects artificially generated cells |
 | Gene Scaling | **VAE** (Variational Autoencoder) | Identifies systematic gene expression manipulation |
 | Label Flips | **GNN-AE** (Graph Neural Network Autoencoder) | Finds mislabeled cells using cell-cell relationships |
-| Noise Injection | **DDPM** (Denoising Diffusion Probabilistic Model) | Detects subtle noise injected to corrupt data |
+| Noise Injection | **DDPM** (Denoising Diffusion Probabilistic Model) | Detects subtle noise corruption |
 
-## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/genomedefender.git
-cd genomedefender
-
-# Create conda environment (recommended)
-conda create -n genomedefender python=3.10
-conda activate genomedefender
-
-# Install dependencies
-pip install -r requirements.txt
-```
+---
 
 ## Quick Start
 
-### Detection Mode
+### 1. Build Master Dataset
 
-Detect anomalies in a 10x Genomics dataset:
+Combine all legitimate biological samples into one training set:
+
+```bash
+python build_master_dataset.py \
+    --input_dirs data/healthy data/cancer data/neoplastic \
+    --output_dir master_data
+```
+
+### 2. Train Models
+
+```bash
+python main.py \
+    --mode train \
+    --model ddpm \
+    --dataset master_data \
+    --config configs/ddpm_config.yaml \
+    --output weights/ddpm_master.pt
+```
+
+### 3. Detect Poisoning
 
 ```bash
 python main.py \
     --mode detect \
     --model ddpm \
-    --dataset ./data/my_10x_data/ \
-    --config ./configs/ddpm_config.yaml \
-    --output ./results/detection_results \
-    --weights ./weights/ddpm_noise.pt
+    --dataset data/suspicious_sample/ \
+    --config configs/ddpm_config.yaml \
+    --output results/detection \
+    --weights weights/ddpm_master.pt
 ```
 
-### Training Mode
-
-Train a model on your own dataset:
-
-```bash
-python main.py \
-    --mode train \
-    --model cae \
-    --dataset ./data/training_data/ \
-    --config ./configs/cae_config.yaml \
-    --output ./weights/cae_custom.pt
-```
+---
 
 ## CLI Reference
 
 ```
-usage: main.py [-h] --mode {train,detect} --model {cae,vae,gnn_ae,ddpm}
-               --dataset DATASET --config CONFIG --output OUTPUT
-               [--weights WEIGHTS] [--incremental] [--threshold THRESHOLD]
-               [--no-report] [--log_level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
-
-Arguments:
-  --mode          Mode: train or detect
-  --model         Model: cae, vae, gnn_ae, or ddpm
-  --dataset       Directory containing 10x Genomics data
-  --config        Path to model configuration YAML file
-  --output        Path for output (weights for train, scores for detect)
-  --weights       Path to model weights (detect mode only)
-  --incremental   Enable incremental training from existing weights
-  --threshold     Detection threshold (0-1 quantile), default: 0.95
-  --no-report     Skip generation of human-readable reports
-  --log_level     Logging level (default: INFO)
+python main.py --mode {train,detect} --model {cae,vae,gnn_ae,ddpm}
+               --dataset DIR --config FILE --output PATH
+               [--weights PATH] [--threshold 0-1] [--no-report]
 ```
 
-## Output Files (Detection Mode)
+| Flag | Description |
+|------|-------------|
+| `--mode` | `train` or `detect` |
+| `--model` | `cae`, `vae`, `gnn_ae`, or `ddpm` |
+| `--dataset` | 10x Genomics data directory |
+| `--config` | Model config YAML file |
+| `--output` | Weights (train) or results (detect) path |
+| `--weights` | Trained model weights (detect only) |
+| `--threshold` | Detection quantile (default: 0.95) |
+| `--no-report` | Skip report generation |
+| `--incremental` | Continue training from weights |
 
-When running detection, GenomeDefender generates:
+---
+
+## Output Files
 
 | File | Description |
 |------|-------------|
-| `*_labels.csv` | Binary cell labels (0=healthy, 1=poisoned) |
-| `*_poisoned.txt` | Detailed list of poisoned cells with affected genes |
-| `*_umap_poison.png` | UMAP visualization colored by poison status |
-| `*_report.txt` | Human-readable detection summary |
-| `*_report.json` | Machine-readable JSON report |
+| `*_labels.csv` | Binary labels (0=healthy, 1=poisoned) |
+| `*_poisoned.txt` | Poisoned cells with affected genes |
+| `*_umap_poison.png` | UMAP visualization |
+| `*_report.txt` | Human-readable summary |
+| `*_report.json` | Machine-readable report |
 
-## Configuration
+---
 
-Each model has its own configuration file in `configs/`:
+## Validation Strategy
 
-- `cae_config.yaml` - Contrastive Autoencoder settings
-- `vae_config.yaml` - Variational Autoencoder settings  
-- `gnn_ae_config.yaml` - GNN Autoencoder settings
-- `ddpm_config.yaml` - DDPM settings
+Since real poisoned datasets don't exist, validate using synthetic attacks:
 
-### DDPM Denoiser Types
+### 1. DDPM-Generated Cells
+Use DDPM's `generate()` method to create synthetic cells, then test if CAE detects them:
 
-DDPM supports two denoiser architectures:
+```python
+from models.ddpm_model import DenoisingDiffusionPM
+model = DenoisingDiffusionPM.load('weights/ddpm_master.pt')
+synthetic = model.generate(n_samples=1000)  # Create "fake" cells
+# Inject into clean dataset and run CAE detection
+```
+
+### 2. Controlled Perturbations
+- **Gene Scaling**: Multiply random genes by 2-10x
+- **Noise Injection**: Add Gaussian noise (σ = 0.01-0.1)
+- **Label Flips**: Shuffle 5-20% of metadata labels
+
+### 3. Hold-Out Evaluation
+Reserve one sample from each category for testing (not used in master dataset).
+
+---
+
+## DDPM Denoiser Options
 
 ```yaml
-# ddpm_config.yaml
+# configs/ddpm_config.yaml
 denoiser_type: mlp  # 'unet' or 'mlp'
 
-# MLP may better preserve data topology for synthetic generation
+# MLP options (may better preserve topology)
 mlp_hidden_dim: 512
 mlp_num_layers: 4
 ```
 
-## Example Workflow
+---
 
-```bash
-# 1. Train on clean reference data
-python main.py --mode train --model ddpm \
-    --dataset ./data/clean_reference/ \
-    --config ./configs/ddpm_config.yaml \
-    --output ./weights/ddpm_trained.pt
+## Project Structure
 
-# 2. Detect anomalies in new data with custom threshold
-python main.py --mode detect --model ddpm \
-    --dataset ./data/suspicious_sample/ \
-    --config ./configs/ddpm_config.yaml \
-    --output ./results/sample_analysis \
-    --weights ./weights/ddpm_trained.pt \
-    --threshold 0.90
-
-# 3. Review the report
-cat ./results/sample_analysis_report.txt
 ```
+genomedefender/
+├── main.py                    # CLI entry point
+├── build_master_dataset.py    # Combine samples into master dataset
+├── configs/                   # Model configurations
+├── models/                    # CAE, VAE, GNN-AE, DDPM implementations
+├── detection/                 # Anomaly detection pipeline
+├── preprocessing/             # Data preprocessing
+├── training/                  # Training loop
+├── utils/                     # Logger, metrics, report generator
+└── weights/                   # Trained model checkpoints
+```
+
+---
 
 ## Requirements
 
@@ -141,8 +165,12 @@ cat ./results/sample_analysis_report.txt
 - Scanpy
 - CUDA-capable GPU (recommended)
 
-See `requirements.txt` for full dependency list.
+```bash
+pip install -r requirements.txt
+```
+
+---
 
 ## License
 
-MIT License - See LICENSE file for details.
+MIT License
