@@ -106,10 +106,10 @@ MIT License
 
 If GenomeDefender fortifies your research, please consider citing:
 ```bibtex
-@software{genomedefender2024,
+@software{genomedefender2026,
   title={GenomeDefender: Data Poisoning Detection for scRNA-seq},
-  author={Your Name},
-  year={2024},
-  url={https://github.com/yourusername/genomedefender}
+  author={Renato A},
+  year={2026},
+  url={https://github.com/RenatoAlvR/genomedefender}
 }
 ```
