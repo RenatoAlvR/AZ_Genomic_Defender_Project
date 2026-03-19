@@ -1,17 +1,28 @@
+# ══════════════════════════════════════════════════════
+# gnn_config.yaml — Graph Neural Network Autoencoder
+# Target attack: Label Flipping
+# ══════════════════════════════════════════════════════
 model: gnn_ae
-input_dim: 3000
-hidden_dim: 256
-latent_dim: 64
+input_dim: 10000        # Must match CAE/VAE/DDPM — same HVG gene space
+hidden_dim: 512         # Wider to handle 10k input (was 256 @ 3k dims)
+latent_dim: 64          # Unchanged — graph latent space
 conv_type: GCN
 dropout: 0.3
-edge_dropout: 0.2
+edge_dropout: 0.2       # Regularisation: random edge drop during training improves generalisation
+
 device: cuda
 loss_weight_recon: 1.0
+
 detection_threshold: 0.95
-batch_size: 10000  # Preprocessing batch size
-k_neighbors: 5      # For GNN-AE graph construction
-train_batch_size: 32  # Unused for GNN-AE (processes entire graph)
-epochs: 100
-learning_rate: 0.001
-patience: 20
+batch_size: 10000       # Preprocessing batch size
+k_neighbors: 5          # kNN graph construction — 5 neighbours per cell
+
+# GNN processes the ENTIRE graph per step, so train_batch_size is unused.
+# The effective "batch" is all 428k cells at once — this is why GNN
+# is the most memory-intensive model. Consider k_neighbors=3 if OOM.
+train_batch_size: 1     # Placeholder only — not used by GNN training loop
+
+epochs: 200
+learning_rate: 0.001    # GNNs typically need higher LR than MLPs
+patience: 25
 raw: False

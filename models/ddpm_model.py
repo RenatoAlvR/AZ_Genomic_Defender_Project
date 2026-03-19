@@ -351,43 +351,72 @@ class DenoisingDiffusionPM(nn.Module):
     
         return torch.cat(generated_samples, dim=0)
 
-    def fit(self, data_loader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer, epochs: int, patience: int = 20):
-        """Train the DDPM model."""
+    def fit(self, data_loader: torch.utils.data.DataLoader,
+            optimizer: torch.optim.Optimizer,
+            epochs: int,
+            patience: int = 20,
+            scheduler: torch.optim.lr_scheduler._LRScheduler = None) -> None:
+        """Train the DDPM model.
+
+        Args:
+            data_loader:  DataLoader yielding batches of shape (batch, input_dim).
+            optimizer:    Optimizer (AdamW recommended).
+            epochs:       Maximum training epochs.
+            patience:     Early-stopping patience (epochs without improvement).
+            scheduler:    Optional LR scheduler — stepped once per epoch.
+        """
         best_loss = float('inf')
         no_improve = 0
+        checkpoint_path = self.config.get('checkpoint_path', 'weights/ddpm_best.pt')
 
         for epoch in range(epochs):
             self.train()
             train_loss_accum = 0.0
             num_batches = 0
 
-            for batch_data in tqdm(data_loader, desc=f"Epoch {epoch} Training"):
-                # Handle tuple or list output from DataLoader
+            for batch_data in tqdm(data_loader, desc=f"Epoch {epoch:>4d}/{epochs}"):
+                # DataLoader may return a tuple (data,) or (data, labels)
                 if isinstance(batch_data, (tuple, list)):
-                    batch_data = batch_data[0]  # Extract the first tensor
-                
-                x = batch_data.to(self.config['device'])  # Use batch_data
+                    batch_data = batch_data[0]
+
+                x = batch_data.to(self.config['device'])
 
                 optimizer.zero_grad()
                 loss = self.compute_loss(x)
                 loss.backward()
-                optimizer.step()
 
+                # Gradient clipping: prevents exploding gradients when
+                # training with large batches on 10k-dim input.
+                # max_norm=1.0 is standard for diffusion models.
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
+                optimizer.step()
                 train_loss_accum += loss.item()
                 num_batches += 1
 
-            avg_train_loss = train_loss_accum / num_batches
-            print(f"Epoch {epoch}: Avg Train Loss: {avg_train_loss:.4f}")
+            avg_loss = train_loss_accum / num_batches
 
-            if avg_train_loss < best_loss:
-                best_loss = avg_train_loss
+            # Step scheduler AFTER optimizer, once per epoch
+            if scheduler is not None:
+                scheduler.step()
+
+            current_lr = optimizer.param_groups[0]['lr']
+            print(f"Epoch {epoch:>4d} | Loss: {avg_loss:.6f} | LR: {current_lr:.2e}")
+
+            # ── Early stopping + best-model checkpoint ──────────────────────
+            if avg_loss < best_loss:
+                best_loss = avg_loss
                 no_improve = 0
+                # Save best weights mid-training so a crash doesn't lose progress
+                self.save(checkpoint_path)
+                print(f"             ↳ New best ({best_loss:.6f}) — checkpoint saved")
             else:
                 no_improve += 1
                 if no_improve >= patience:
-                    print(f"Early stopping triggered after {epoch + 1} epochs.")
+                    print(f"\nEarly stopping triggered at epoch {epoch}.")
+                    print(f"Best loss: {best_loss:.6f} | Checkpoint: {checkpoint_path}")
                     break
-
+                
     def detect(self, x: np.ndarray) -> np.ndarray:
         """Detect injected biological noise using reconstruction errors."""
         self.eval()

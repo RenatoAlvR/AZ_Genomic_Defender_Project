@@ -129,56 +129,111 @@ class VariationalAutoencoder(nn.Module):
             loss += self.loss_weights.get('cls', 1.0) * cls_loss  # Add classification loss
         return loss
 
-    def fit(self, data_loader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer, epochs: int, patience: int = 20, validation_loader: Optional[torch.utils.data.DataLoader] = None):
-        """Train the VAE model."""
-        best_val_loss = float('inf')
-        epochs_no_improve = 0
+    def fit(self, data_loader: torch.utils.data.DataLoader,
+            optimizer: torch.optim.Optimizer,
+            epochs: int,
+            patience: int = 20,
+            scheduler: torch.optim.lr_scheduler._LRScheduler = None,
+            validation_loader: Optional[torch.utils.data.DataLoader] = None) -> None:
+        """Train the VAE model.
+
+        Args:
+            data_loader:       DataLoader with HVG-selected scRNA-seq data
+            optimizer:         Optimizer (AdamW recommended)
+            epochs:            Maximum training epochs
+            patience:          Early-stopping patience
+            scheduler:         Optional LR scheduler — stepped once per epoch
+            validation_loader: Optional held-out loader for val-loss early stopping
+
+        Note on KL annealing:
+            Raw KL loss early in training can dominate and push the encoder
+            to produce a pure N(0,1) posterior regardless of input — the
+            "posterior collapse" problem. The linear warmup below weights KL
+            from 0 → loss_weights['kl'] over the first 20% of training,
+            letting the reconstruction loss anchor the latent space first.
+            This gives the VAE a tighter, more discriminative manifold for
+            detecting gene-scaling attacks.
+        """
+        best_loss  = float('inf')
+        no_improve = 0
+        checkpoint_path = self.config.get('checkpoint_path', 'weights/vae_best.pt')
+
+        # KL annealing: ramp up KL weight over first 20% of training
+        kl_warmup_epochs = max(1, int(epochs * 0.2))
+        base_kl_weight   = self.loss_weights['kl']
 
         for epoch in range(epochs):
+            # Linear KL warmup
+            kl_weight = base_kl_weight * min(1.0, epoch / kl_warmup_epochs)
+
             self.train()
             train_loss_accum = 0.0
             recon_loss_accum = 0.0
-            kl_loss_accum = 0.0
-            cls_loss_accum = 0.0
+            kl_loss_accum    = 0.0
+            cls_loss_accum   = 0.0
             num_batches = 0
 
-            for batch_data in tqdm(data_loader, desc=f"Epoch {epoch} Training"):
-                # Handle tuple or list output from DataLoader
+            for batch_data in tqdm(data_loader, desc=f"Epoch {epoch:>4d}/{epochs}"):
                 if isinstance(batch_data, (tuple, list)) and len(batch_data) == 2:
                     x, labels = batch_data
                 else:
                     x, labels = batch_data[0], None
-                
+
                 x = x.to(self.device)
                 if labels is not None:
                     labels = labels.to(self.device)
 
                 optimizer.zero_grad()
-                total_loss = self.compute_loss(x, labels)
-                total_loss.backward()
+
+                # ── Single forward pass — reuse for all loss terms ──────────
+                # Previously fit() called self(x) twice: once in compute_loss(),
+                # then again after optimizer.step() to log component losses.
+                # That second pass logs values from a DIFFERENT stochastic sample
+                # (reparameterize draws new noise each call) and wastes compute.
+                outputs              = self(x)
+                recon_loss, kl_loss  = self._vae_loss(outputs['recon'], x, outputs['mu'], outputs['log_var'])
+
+                # Use annealed KL weight instead of fixed config weight
+                loss = self.loss_weights['recon'] * recon_loss + kl_weight * kl_loss
+
+                if labels is not None:
+                    logits   = self.classifier(outputs['mu'])
+                    cls_loss = F.binary_cross_entropy_with_logits(logits.squeeze(-1), labels.float())
+                    loss    += self.loss_weights.get('cls', 1.0) * cls_loss
+                    cls_loss_accum += cls_loss.item()
+
+                loss.backward()
+
+                # Gradient clipping — KL term can produce large gradients
+                # for fc_mu / fc_log_var layers when kl_weight is small
+                # and reconstruction dominates, then spikes as KL ramps up
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
                 optimizer.step()
 
-                outputs = self(x)
-                recon_loss, kl_loss = self._vae_loss(outputs['recon'], x, outputs['mu'], outputs['log_var'])
-                train_loss_accum += total_loss.item()
+                train_loss_accum += loss.item()
                 recon_loss_accum += recon_loss.item()
-                kl_loss_accum += kl_loss.item()
-                if labels is not None:
-                    logits = self.classifier(outputs['mu'])
-                    cls_loss = F.binary_cross_entropy_with_logits(logits.squeeze(-1), labels.float())
-                    cls_loss_accum += cls_loss.item()
+                kl_loss_accum    += kl_loss.item()
                 num_batches += 1
 
-            avg_train_loss = train_loss_accum / num_batches
-            avg_recon_loss = recon_loss_accum / num_batches
-            avg_kl_loss = kl_loss_accum / num_batches
-            avg_cls_loss = cls_loss_accum / num_batches if labels is not None else 0.0
-            print(f"Epoch {epoch}: Avg Train Loss: {avg_train_loss:.4f} "
-                  f"(Recon: {avg_recon_loss:.4f}, KL: {avg_kl_loss:.4f}, Cls: {avg_cls_loss:.4f})")
+            avg_train  = train_loss_accum / num_batches
+            avg_recon  = recon_loss_accum  / num_batches
+            avg_kl     = kl_loss_accum     / num_batches
+            avg_cls    = cls_loss_accum    / num_batches
 
-            if validation_loader:
+            if scheduler is not None:
+                scheduler.step()
+
+            current_lr = optimizer.param_groups[0]['lr']
+            print(f"Epoch {epoch:>4d} | Loss: {avg_train:.6f} "
+                  f"(Recon: {avg_recon:.4f} | KL: {avg_kl:.4f} [w={kl_weight:.3f}] | Cls: {avg_cls:.4f}) "
+                  f"| LR: {current_lr:.2e}")
+
+            # ── Validation loss (optional) ───────────────────────────────────
+            monitor_loss = avg_train
+            if validation_loader is not None:
                 self.eval()
-                val_loss_accum = 0.0
+                val_accum   = 0.0
                 val_batches = 0
                 with torch.no_grad():
                     for batch_data in validation_loader:
@@ -189,30 +244,26 @@ class VariationalAutoencoder(nn.Module):
                         x_val = x_val.to(self.device)
                         if labels_val is not None:
                             labels_val = labels_val.to(self.device)
-                        total_loss = self.compute_loss(x_val, labels_val)
-                        val_loss_accum += total_loss.item()
+                        outputs_val             = self(x_val)
+                        r_loss, k_loss          = self._vae_loss(outputs_val['recon'], x_val,
+                                                                  outputs_val['mu'], outputs_val['log_var'])
+                        val_loss                = self.loss_weights['recon'] * r_loss + kl_weight * k_loss
+                        val_accum  += val_loss.item()
                         val_batches += 1
+                monitor_loss = val_accum / val_batches
+                print(f"             Val Loss: {monitor_loss:.6f}")
 
-                avg_val_loss = val_loss_accum / val_batches
-                print(f"Epoch {epoch}: Avg Validation Loss: {avg_val_loss:.4f}")
-
-                if avg_val_loss < best_val_loss:
-                    best_val_loss = avg_val_loss
-                    epochs_no_improve = 0
-                else:
-                    epochs_no_improve += 1
-                    if epochs_no_improve >= patience:
-                        print(f"Early stopping triggered after {epoch + 1} epochs.")
-                        break
+            # ── Early stopping + best-model checkpoint ───────────────────────
+            if monitor_loss < best_loss:
+                best_loss  = monitor_loss
+                no_improve = 0
+                self.save(checkpoint_path)
+                print(f"             ↳ New best ({best_loss:.6f}) — checkpoint saved")
             else:
-                if avg_train_loss < best_val_loss:
-                    best_val_loss = avg_train_loss
-                    epochs_no_improve = 0
-                else:
-                    epochs_no_improve += 1
-                    if epochs_no_improve >= patience:
-                        print(f"Early stopping triggered after {epoch + 1} epochs.")
-                        break
+                no_improve += 1
+                if no_improve >= patience:
+                    print(f"\nEarly stopping at epoch {epoch}. Best loss: {best_loss:.6f}")
+                    break
 
     def detect(self, x: np.ndarray) -> np.ndarray:
         """Detect gene scaling attacks using reconstruction errors."""

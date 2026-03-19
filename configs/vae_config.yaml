@@ -1,18 +1,25 @@
+# ══════════════════════════════════════════════════════
+# vae_config.yaml — Variational Autoencoder
+# Target attack: Gene Scaling
+# ══════════════════════════════════════════════════════
 model: vae
-input_dim: 3000
-hidden_dim: 512
-latent_dim: 64
+input_dim: 10000        # HVG selection — gene-level resolution needed to detect subtle scaling
+hidden_dim: 1024        # Wider hidden layer for 10k input (was 512 @ 3k dims)
+latent_dim: 128         # Larger latent than default 64 — captures more biological variation
+                        # giving a tighter manifold that makes subtle scaling anomalies visible
 dropout: 0.2
 device: cuda
+
 loss_weights:
-  recon: 0.8
-  kl: 0.2
-  cls: 1.0
+  recon: 0.8            # Reconstruction dominates — detection is based on recon error
+  kl: 0.2              # KL regularises the latent space (annealed from 0 in fit())
+  cls: 1.0              # Classification head weight
+
 detection_threshold: 0.95
-batch_size: 10000  # Preprocessing batch size
-k_neighbors: 5      # For GNN-AE (unused for VAE)
-train_batch_size: 32  # Training batch size
-epochs: 100
-learning_rate: 0.00005
-patience: 20
+batch_size: 10000       # Preprocessing batch size
+k_neighbors: 5          # Unused for VAE
+train_batch_size: 512   # RTX 4090 safe with 10k input + 1024 hidden (was 32)
+epochs: 200
+learning_rate: 0.0003   # AdamW tuned — original 0.00005 was too conservative for batch=512
+patience: 25
 raw: False

@@ -7,6 +7,9 @@ import logging
 from typing import List, Tuple
 import argparse
 import gc
+import gzip
+import shutil
+import io
 
 def setup_logging(log_level: str = 'INFO', log_file: str = 'logs/combine_data.log'):
     """Set up logging to file and console."""
@@ -93,18 +96,26 @@ def combine_patient_data(data_dir: str, output_dir: str) -> None:
 
     # Save combined dataset
     output_dir.mkdir(parents=True, exist_ok=True)
-    logging.info(f"Saving combined dataset to {output_dir}...")
+    logging.info(f"Saving compressed dataset to {output_dir}...")
 
-    # Write sparse matrix directly to disk
-    mmwrite(output_dir / 'matrix.mtx', combined_adata.X)
+    # Write sparse matrix to an in-memory buffer, then gzip it to disk
+    # (mmwrite doesn't support writing directly to gzip streams)
+    logging.info("Writing matrix.mtx.gz...")
+    mtx_buffer = io.BytesIO()
+    mmwrite(mtx_buffer, combined_adata.X)
+    with gzip.open(output_dir / 'matrix.mtx.gz', 'wb') as f_gz:
+        f_gz.write(mtx_buffer.getvalue())
+    del mtx_buffer
 
-    # Write barcodes
-    combined_adata.obs_names.to_series().to_csv(
-        output_dir / 'barcodes.tsv', index=False, header=False
-    )
+    # Write barcodes.tsv.gz
+    logging.info("Writing barcodes.tsv.gz...")
+    with gzip.open(output_dir / 'barcodes.tsv.gz', 'wt') as f_gz:
+        combined_adata.obs_names.to_series().to_csv(f_gz, index=False, header=False)
 
-    # Write features
-    common_features.to_csv(output_dir / 'features.tsv', sep='\t', header=False)
+    # Write features.tsv.gz
+    logging.info("Writing features.tsv.gz...")
+    with gzip.open(output_dir / 'features.tsv.gz', 'wt') as f_gz:
+        common_features.to_csv(f_gz, sep='\t', header=False)
 
     logging.info(f"Success! Dataset saved with {combined_adata.n_obs} cells and {combined_adata.n_vars} genes.")
 

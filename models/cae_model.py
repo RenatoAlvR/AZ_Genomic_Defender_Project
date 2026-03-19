@@ -172,79 +172,105 @@ class ContrastiveAutoencoder(nn.Module):
             loss += self.loss_weights.get('cls', 1.0) * cls_loss  # Add classification loss
         return loss
 
-    def fit(self, data_loader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer, epochs: int, patience: int = 20):
-        """
-        Train the CAE model using reconstruction and contrastive losses.
+    def fit(self, data_loader: torch.utils.data.DataLoader,
+            optimizer: torch.optim.Optimizer,
+            epochs: int,
+            patience: int = 20,
+            scheduler: torch.optim.lr_scheduler._LRScheduler = None) -> None:
+        """Train the CAE model using reconstruction and contrastive losses.
 
         Args:
-            data_loader: DataLoader with PCA-reduced scRNA-seq data (shape: [batch_size, input_dim])
-            optimizer: Optimizer for training (e.g., Adam)
-            epochs: Number of training epochs
-            patience: Number of epochs to wait for early stopping
+            data_loader: DataLoader with HVG-selected scRNA-seq data (shape: [batch, input_dim])
+            optimizer:   Optimizer (AdamW recommended)
+            epochs:      Maximum training epochs
+            patience:    Early-stopping patience
+            scheduler:   Optional LR scheduler — stepped once per epoch
         """
-        self.train()
         best_loss = float('inf')
         no_improve = 0
+        checkpoint_path = self.config.get('checkpoint_path', 'weights/cae_best.pt')
 
         for epoch in range(epochs):
-            total_loss = 0.0
+            self.train()
+            total_loss_accum = 0.0
             recon_loss_accum = 0.0
             cont_loss_accum = 0.0
-            cls_loss_accum = 0.0
+            cls_loss_accum  = 0.0
             num_batches = 0
 
-            for batch_data in tqdm(data_loader, desc=f"Epoch {epoch} Training"):
-                # Handle tuple or list output from DataLoader
+            for batch_data in tqdm(data_loader, desc=f"Epoch {epoch:>4d}/{epochs}"):
                 if isinstance(batch_data, (tuple, list)) and len(batch_data) == 2:
                     x, labels = batch_data
                 else:
                     x, labels = batch_data[0], None
-                
+
                 x = x.to(self.device)
                 if labels is not None:
                     labels = labels.to(self.device)
 
                 batch_size = x.shape[0]
 
-                # Generate positive and negative pairs
-                noise = torch.randn_like(x) * 0.1  # Small noise for positive pairs
-                x_pos = x + noise
-                positive_pairs = torch.stack([torch.arange(batch_size), torch.arange(batch_size)], dim=1).to(self.device)
+                # Positive pairs: each cell paired with its augmented version
+                # Negative pairs: all other combinations within the batch
+                positive_pairs = torch.stack(
+                    [torch.arange(batch_size), torch.arange(batch_size)], dim=1
+                ).to(self.device)
                 negative_pairs = torch.combinations(torch.arange(batch_size), r=2).to(self.device)
 
                 optimizer.zero_grad()
-                loss = self.compute_loss(x, positive_pairs, negative_pairs, labels)
-                loss.backward()
-                optimizer.step()
 
+                # ── Single forward pass — reuse outputs for all loss terms ──
+                # Previously the code did a second forward pass AFTER optimizer.step()
+                # just to log individual losses. That's wasteful and logs stale values.
                 outputs = self(x)
                 recon_loss = F.mse_loss(outputs['recon'], x)
-                cont_loss = self.contrastive_loss(outputs['proj'], positive_pairs, negative_pairs)
-                total_loss += loss.item()
-                recon_loss_accum += recon_loss.item()
-                cont_loss_accum += cont_loss.item()
+                cont_loss  = self.contrastive_loss(outputs['proj'], positive_pairs, negative_pairs)
+                loss       = self.alpha * cont_loss + self.beta * recon_loss
+
                 if labels is not None:
-                    logits = self.classifier(outputs['latent'])
-                    cls_loss = F.binary_cross_entropy_with_logits(logits.squeeze(-1), labels.float())
+                    logits    = self.classifier(outputs['latent'])
+                    cls_loss  = F.binary_cross_entropy_with_logits(logits.squeeze(-1), labels.float())
+                    loss     += self.loss_weights.get('cls', 1.0) * cls_loss
                     cls_loss_accum += cls_loss.item()
+
+                loss.backward()
+
+                # Gradient clipping — contrastive loss gradients can spike
+                # when negative pairs dominate early in training
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
+                optimizer.step()
+
+                total_loss_accum += loss.item()
+                recon_loss_accum += recon_loss.item()
+                cont_loss_accum  += cont_loss.item()
                 num_batches += 1
 
-            avg_loss = total_loss / num_batches
-            avg_recon_loss = recon_loss_accum / num_batches
-            avg_cont_loss = cont_loss_accum / num_batches
-            avg_cls_loss = cls_loss_accum / num_batches if labels is not None else 0.0
-            print(f"Epoch {epoch}: Avg Train Loss: {avg_loss:.4f} (Recon: {avg_recon_loss:.4f}, Contrastive: {avg_cont_loss:.4f}, Cls: {avg_cls_loss:.4f})")
+            avg_loss      = total_loss_accum / num_batches
+            avg_recon     = recon_loss_accum  / num_batches
+            avg_cont      = cont_loss_accum   / num_batches
+            avg_cls       = cls_loss_accum    / num_batches
 
-            # Early stopping
+            if scheduler is not None:
+                scheduler.step()
+
+            current_lr = optimizer.param_groups[0]['lr']
+            print(f"Epoch {epoch:>4d} | Loss: {avg_loss:.6f} "
+                  f"(Recon: {avg_recon:.4f} | Cont: {avg_cont:.4f} | Cls: {avg_cls:.4f}) "
+                  f"| LR: {current_lr:.2e}")
+
+            # ── Early stopping + best-model checkpoint ──────────────────────
             if avg_loss < best_loss:
                 best_loss = avg_loss
                 no_improve = 0
+                self.save(checkpoint_path)
+                print(f"             ↳ New best ({best_loss:.6f}) — checkpoint saved")
             else:
                 no_improve += 1
                 if no_improve >= patience:
-                    print(f"Early stopping triggered after {epoch + 1} epochs.")
+                    print(f"\nEarly stopping at epoch {epoch}. Best loss: {best_loss:.6f}")
                     break
-
+                
     def detect(self, X: np.ndarray) -> np.ndarray:
         """
         Detect synthetic cells by computing anomaly scores.

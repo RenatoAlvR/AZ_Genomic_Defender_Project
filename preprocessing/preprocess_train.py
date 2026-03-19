@@ -10,55 +10,44 @@ import umap
 from torch.utils.data import TensorDataset, DataLoader
 from torch_geometric.data import Data
 from torch_geometric.nn import knn_graph
-from sklearn.neighbors import kneighbors_graph
 from pathlib import Path
 from typing import Dict, Any, Union
 import scipy.sparse
 
-def save_and_visualize(adata: sc.AnnData, X_pca: np.ndarray, data_dir: Path, dataset_name: str):
-    """Save preprocessed PCA data and generate violin plot & UMAP visualization
-    without running into memory issues.
+
+def save_and_visualize(adata: sc.AnnData, X: np.ndarray, data_dir: Path, dataset_name: str):
+    """Save preprocessed data and generate violin plot & UMAP visualization.
 
     Args:
-        adata (sc.AnnData): AnnData object with cell and gene names.
-        X_pca (np.ndarray or sparse matrix): PCA-reduced data (n_cells, input_dim).
-        data_dir (Path): Original dataset directory.
-        dataset_name (str): Name of the dataset (e.g., 'end_data').
+        adata:        AnnData object with cell and gene names (post-HVG selection).
+        X:            Processed dense array (n_cells, input_dim).
+        data_dir:     Original dataset directory.
+        dataset_name: Name of the dataset (e.g., 'final_data').
     """
-    # Create output directory
     output_dir = Path("preprocessing") / dataset_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save PCA data, cell names, and gene names
-    np.save(output_dir / "data.npy", X_pca if not scipy.sparse.issparse(X_pca) else X_pca.toarray())
+    # Save processed matrix, cell names, gene names
+    np.save(output_dir / "data.npy", X)
     pd.Series(adata.obs_names).to_csv(output_dir / "cells.txt", index=False, header=False)
-    pd.Series(adata.var_names[:X_pca.shape[1]]).to_csv(output_dir / "genes.txt", index=False, header=False)
+    pd.Series(adata.var_names).to_csv(output_dir / "genes.txt", index=False, header=False)
     print(f"Saved preprocessed data to {output_dir / 'data.npy'}")
 
-    # --- Violin Plot ---
-    # Use a subset of cells for plotting (avoid memory explosion)
-    n_violin_samples = 5000
-    if X_pca.shape[0] > n_violin_samples:
-        idx_violin = np.random.choice(X_pca.shape[0], n_violin_samples, replace=False)
-        X_violin = X_pca[idx_violin]
-        adata_violin = adata[idx_violin]
+    # ── Violin plot (subsample to avoid memory explosion) ─────────────────────
+    n_violin = 5000
+    if X.shape[0] > n_violin:
+        idx = np.random.choice(X.shape[0], n_violin, replace=False)
+        X_v = X[idx]
+        adata_v = adata[idx]
     else:
-        X_violin = X_pca
-        adata_violin = adata
+        X_v, adata_v = X, adata
 
-    if scipy.sparse.issparse(X_violin):
-        X_violin = X_violin.toarray()
+    variances     = np.var(X_v, axis=0)
+    top_idx       = np.argsort(variances)[-10:]
+    top_genes     = adata_v.var_names[top_idx]
+    df            = pd.DataFrame(X_v[:, top_idx], columns=top_genes)
+    df_melt       = df.melt(var_name="Gene", value_name="Expression")
 
-    # Select top variable genes
-    variances = np.var(X_violin, axis=0)
-    top_genes_idx = np.argsort(variances)[-10:]
-    top_genes = adata_violin.var_names[top_genes_idx]
-
-    # Convert to DataFrame for violin plot
-    df = pd.DataFrame(X_violin[:, top_genes_idx], columns=top_genes)
-    df_melt = df.melt(var_name="Gene", value_name="Expression")
-
-    # Create violin plot
     plt.figure(figsize=(12, 6))
     sns.violinplot(x="Gene", y="Expression", data=df_melt, inner="quartile")
     plt.title(f"Gene Expression Distributions - {dataset_name}")
@@ -66,200 +55,202 @@ def save_and_visualize(adata: sc.AnnData, X_pca: np.ndarray, data_dir: Path, dat
     plt.tight_layout()
     plt.savefig(output_dir / "gene_distributions.png", dpi=300)
     plt.close()
-    print(f"Saved gene distribution plot to {output_dir / 'gene_distributions.png'}")
+    print(f"Saved violin plot to {output_dir / 'gene_distributions.png'}")
 
-    # --- UMAP ---
-    # Subsample for UMAP (visualization only)
-    n_umap_samples = 20000
-    if X_pca.shape[0] > n_umap_samples:
-        idx_umap = np.random.choice(X_pca.shape[0], n_umap_samples, replace=False)
-        X_umap = X_pca[idx_umap]
-    else:
-        X_umap = X_pca
+    # ── UMAP (subsample for speed) ────────────────────────────────────────────
+    n_umap = 20000
+    X_u    = X[np.random.choice(X.shape[0], n_umap, replace=False)] if X.shape[0] > n_umap else X
 
-    if scipy.sparse.issparse(X_umap):
-        X_umap = X_umap.toarray()
-
-    reducer = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=42)
-    umap_embedding = reducer.fit_transform(X_umap)
+    reducer       = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=42)
+    embedding     = reducer.fit_transform(X_u)
 
     plt.figure(figsize=(10, 8))
-    plt.scatter(umap_embedding[:, 0], umap_embedding[:, 1], s=10, alpha=0.5)
+    plt.scatter(embedding[:, 0], embedding[:, 1], s=10, alpha=0.5)
     plt.title(f"UMAP of {dataset_name}")
     plt.xlabel("UMAP 1")
     plt.ylabel("UMAP 2")
     plt.tight_layout()
     plt.savefig(output_dir / "umap.png", dpi=300)
     plt.close()
-    print(f"Saved UMAP plot to {output_dir / 'umap.png'}")
+    print(f"Saved UMAP to {output_dir / 'umap.png'}")
 
-    
-def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[np.ndarray, Data]:
+
+def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[DataLoader, Data]:
     """Preprocess 10x Genomics data for training.
 
+    Pipeline (Option A — seurat_v3 on raw counts):
+        1. Load raw counts
+        2. HVG selection on raw counts  (seurat_v3 requires this)
+        3. Subset to HVGs
+        4. Normalize → log1p
+        5. Scale (zero mean, unit variance, capped at max_value=10)
+        6. Save dense array + HVG gene list
+
     Args:
-        data_dir (str): Directory containing matrix.mtx, barcodes.tsv, and features.tsv.
-        config (Dict): Configuration dictionary with model, input_dim, batch_size, k_neighbors.
+        data_dir: Directory containing matrix.mtx.gz, barcodes.tsv.gz, features.tsv.gz.
+        config:   Config dict from YAML.
 
     Returns:
-        np.ndarray: PCA-reduced data (n_cells, input_dim) for CAE, VAE, DDPM.
-        Data: PyTorch Geometric Data object with x and edge_index for GNN-AE.
+        DataLoader for CAE / VAE / DDPM.
+        torch_geometric Data object for GNN-AE.
     """
-    # Extract config parameters
-    model = config.get('model', '').lower()
-    device = config.get('device', 'cpu')
-    input_dim = config.get('input_dim', 3000)
-    batch_size = config.get('batch_size', 10000)  # For memory-efficient processing
-    k_neighbors = config.get('k_neighbors', 5)  # For GNN-AE graph construction
-    train_batch_size = config.get('train_batch_size', 32)  # For DataLoader
-    raw = config.get('raw', False)  # Use or not the raw data
+    model            = config.get('model', '').lower()
+    device           = config.get('device', 'cpu')
+    input_dim        = config.get('input_dim', 10000)
+    k_neighbors      = config.get('k_neighbors', 5)
+    train_batch_size = config.get('train_batch_size', 512)
+    raw              = config.get('raw', False)
 
-    # Validate inputs
-    data_dir = Path(data_dir)
-    assert data_dir.is_dir(), f"Data directory {data_dir} does not exist"
     assert model in ['cae', 'vae', 'gnn_ae', 'ddpm'], f"Unsupported model: {model}"
-    assert input_dim > 0, "input_dim must be positive"
-    assert batch_size > 0, "batch_size must be positive"
-    assert k_neighbors > 0, "k_neighbors must be positive"
-    assert device in ['cpu', 'cuda'], f"No device available"
+    assert input_dim > 0,    "input_dim must be positive"
+    assert k_neighbors > 0,  "k_neighbors must be positive"
+    assert device in ['cpu', 'cuda'], "device must be 'cpu' or 'cuda'"
 
-    # Check for preprocessed data
-    dataset_name = data_dir.name
-    output_dir = Path('preprocessing') / dataset_name
-    data_path = output_dir / 'data.npy'
-    graph_path = output_dir / 'edge_index.pt'
-    labels_path = output_dir / 'labels.txt'
-    labels = None
+    data_dir      = Path(data_dir)
+    dataset_name  = data_dir.name
+    output_dir    = Path('preprocessing') / dataset_name
+    data_path     = output_dir / 'data.npy'
+    hvg_path      = output_dir / 'hvg_genes.txt'
+    graph_path    = output_dir / 'edge_index.pt'
 
-    if data_path.exists() and not raw:
-        print(f"Loading preprocessed data from {data_path}")
+    # ── Cache hit: skip preprocessing if outputs already exist ────────────────
+    if data_path.exists() and hvg_path.exists() and not raw:
+        print(f"Loading cached preprocessed data from {data_path}")
         X = np.load(data_path)
-        # Verify shape matches expected input_dim
         if X.shape[1] != input_dim:
-            raise ValueError(f"Loaded data has {X.shape[1]} features, expected {input_dim}")
-
-        if labels_path.exists():
-            print(f"Loading labels from {labels_path}")
-            labels = np.loadtxt(labels_path)
-            if labels.shape[0] != X.shape[0]:
-                raise ValueError(f"Labels shape {labels.shape[0]} does not match data shape {X.shape[0]}")
+            raise ValueError(
+                f"Cached data has {X.shape[1]} features but config expects {input_dim}. "
+                f"Delete preprocessing/{dataset_name}/ and rerun."
+            )
+        print(f"Loaded cached data: {X.shape}")
 
     else:
-        # Load 10x Genomics data
+        # ── Step 1: Load raw counts ───────────────────────────────────────────
+        print("Loading 10x data (raw counts)...")
         adata = sc.read_10x_mtx(data_dir, var_names='gene_symbols', cache=False)
-        print(f"Initial AnnData shape: {adata.shape}")
+        print(f"Loaded raw data: {adata.shape}  ({adata.n_obs} cells × {adata.n_vars} genes)")
 
-        '''
-        # Generate UMAP for raw data
-        output_dir = Path('preprocessing') / dataset_name
+        # ── Step 2: HVG selection ON RAW COUNTS ──────────────────────────────
+        # seurat_v3 uses a raw-count variance estimator (Poisson model).
+        # Running it after normalization/log gives incorrect variance estimates
+        # and selects the wrong genes — kept before normalize intentionally.
+        print(f"Selecting top {input_dim} highly variable genes (seurat_v3 on raw counts)...")
+        sc.pp.highly_variable_genes(
+            adata,
+            n_top_genes=input_dim,
+            flavor='seurat_v3',
+            span=1.0           # span=1.0 avoids edge-gene exclusion in small datasets
+        )
+        adata = adata[:, adata.var.highly_variable].copy()
+        print(f"After HVG selection: {adata.shape}")
+
+        # Save HVG gene list immediately — detection pipeline MUST use this exact set
         output_dir.mkdir(parents=True, exist_ok=True)
-        umap_embedding = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=42).fit_transform(adata.X)
-        plt.figure(figsize=(10, 8))
-        plt.scatter(umap_embedding[:, 0], umap_embedding[:, 1], s=10, alpha=0.5)
-        plt.title(f'UMAP of Raw Data - {dataset_name}')
-        plt.xlabel('UMAP 1')
-        plt.ylabel('UMAP 2')
-        plt.tight_layout()
-        plt.savefig(output_dir / 'raw_umap.png', dpi=300)
-        plt.close()
-        print(f"Saved raw UMAP plot to {output_dir / 'raw_umap.png'}")
-        '''
+        pd.Series(adata.var_names.tolist()).to_csv(hvg_path, index=False, header=False)
+        print(f"Saved HVG gene list to {hvg_path}")
 
-        '''
-        # Check if dimensions are transposed (genes as obs, cells as vars)
-        expected_cells = 69032  # From barcodes.tsv.gz
-        expected_genes = 33538  # From features.tsv.gz
-        if adata.shape == (expected_genes, expected_cells):
-            print("Transposing AnnData to correct shape (cells × genes)")
-            adata.X = adata.X.T
-            obs_names = adata.var_names
-            var_names = adata.obs_names
-            adata.obs_names = obs_names
-            adata.var_names = var_names
-            adata.obs = adata.obs.reindex(adata.obs_names)
-            adata.var = adata.var.reindex(adata.var_names)
-            print(f"Corrected AnnData shape: {adata.shape}")
-        '''
+        # ── Step 3: Normalize → log1p ─────────────────────────────────────────
+        print("Normalizing and log-transforming...")
+        sc.pp.normalize_total(adata, target_sum=1e4)
+        sc.pp.log1p(adata)
 
-        if raw:
-            print(f"Going to pass raw data to the model...")
-            # Use raw data, limit to input_dim features if necessary
-            X = adata.X[:, :input_dim]   # keep as sparse if already sparse
-        else:
-            print(f"Processsing data for the model...")
-            # Process in batches if dataset is large
-            n_cells = adata.n_obs
-            batch_size = min(batch_size, n_cells)
-            processed_data = []
+        # ── Step 4: Densify BEFORE scale ─────────────────────────────────────
+        # sc.pp.scale() densifies internally regardless, but doing it explicitly
+        # here gives us control over WHEN the ~16 GB spike happens and lets us
+        # log it clearly. (428k cells × 10k genes × 4 bytes ≈ 16 GB)
+        if scipy.sparse.issparse(adata.X):
+            print("Densifying sparse matrix before scaling (~16 GB RAM spike expected)...")
+            adata.X = adata.X.toarray()
+            print("Densification complete.")
 
-            for start in range(0, n_cells, batch_size):
-                end = min(start + batch_size, n_cells)
-                batch = adata[start:end].copy()
+        # ── Step 5: Scale (zero mean, unit variance, capped at 10) ───────────
+        # max_value=10 clips extreme outliers (e.g. marker genes with very high
+        # expression in rare cell types) that would otherwise dominate the
+        # anomaly score distribution and mask subtle attacks.
+        print("Scaling (zero mean, unit variance, max_value=10)...")
+        sc.pp.scale(adata, max_value=10)
 
-                # Preprocessing steps
-                sc.pp.normalize_total(batch, target_sum=1e4)
-                sc.pp.log1p(batch)
-                sc.pp.pca(batch, n_comps=input_dim, svd_solver='arpack')
+        # Save per-gene scaling parameters so detection uses identical transformation
+        scaler_stats = {
+            'mean': adata.var['mean'].values,      # scanpy stores these in adata.var after scale
+            'std':  adata.var['std'].values
+        }
+        np.save(output_dir / 'scaler_stats.npy', scaler_stats)
+        print(f"Saved scaler stats to {output_dir / 'scaler_stats.npy'}")
 
-                # Extract PCA features
-                batch_data = batch.obsm['X_pca']
-                processed_data.append(batch_data)
+        # ── Step 6: Extract final dense array ────────────────────────────────
+        X = adata.X if isinstance(adata.X, np.ndarray) else np.array(adata.X)
+        print(f"Final data shape: {X.shape} | mean={X.mean():.4f} | std={X.std():.4f}")
 
-            # Combine batches
-            X = np.concatenate(processed_data, axis=0)
-        
-        # Save preprocessed data and visualize
+        if np.isnan(X).any():
+            raise ValueError("NaNs detected in preprocessed data — check input matrix for empty cells.")
+
+        # Save and generate visualizations
         save_and_visualize(adata, X, data_dir, dataset_name)
-    
-    if scipy.sparse.issparse(X):
-        X = X.toarray()
 
-    # Convert to PyTorch tensor
+    # ── Build graph or DataLoader ─────────────────────────────────────────────
     X_torch = torch.tensor(X, dtype=torch.float32)
-    labels_torch = None
-    if labels is not None:
-        labels_torch = torch.tensor(labels, dtype=torch.long)
 
     if model == 'gnn_ae':
         if graph_path.exists():
+            print(f"Loading cached kNN graph from {graph_path}")
             edge_index = torch.load(graph_path)
-            return Data(x=X_torch, edge_index=edge_index)
         else:
-            # Construct k-NN graph
-            print(f"Constructing k-NN graph... (could take a lot of time)")
-            start_time = time.time()
+            edge_index = _build_knn_graph(X_torch, k_neighbors, device, graph_path)
+        return Data(x=X_torch, edge_index=edge_index)
 
-            if(device == 'cuda' and torch.cuda.is_available()):
-                # Use GPU to process the graph (caution with VRAM)
-                print(f"Using GPU for graph construction")
-                X_torch = X_torch.to('cuda')
-                edge_index = knn_graph(X_torch, k=k_neighbors, loop=False)  # No num_workers needed on GPU
-                X_torch = X_torch.cpu()
-                edge_index = edge_index.to('cpu')
-            else:
-                num_cores = os.cpu_count()
-                edge_index = knn_graph(X_torch, k=k_neighbors, loop=False, num_workers= num_cores)
-
-            torch.save(edge_index, graph_path)
-            print(f"knn_graph took {time.time() - start_time:.2f} seconds")
-
-        # Create Data object
-        data = Data(x=X_torch, edge_index=edge_index)
-        if labels_torch is not None:
-            data.labels = labels_torch
-        return data  # Return single Data object for GNN-AE
-    
-    # Create DataLoader for other models
-    if labels_torch is not None:
-        dataset = TensorDataset(X_torch, labels_torch)
-    else:
-        dataset = TensorDataset(X_torch)
-    data_loader = DataLoader(dataset, batch_size=train_batch_size, shuffle=True, drop_last=True)
-    
-    # Debug DataLoader output
-    batch_example = next(iter(data_loader))
-    print(f"Preprocess DataLoader batch example: shape: {batch_example[0].shape}, type: {type(batch_example)}")
-    if len(batch_example) > 1:
-        print(f"Labels shape: {batch_example[1].shape}")
+    dataset     = TensorDataset(X_torch)
+    data_loader = DataLoader(
+        dataset,
+        batch_size=train_batch_size,
+        shuffle=True,
+        drop_last=True,
+        num_workers=4,   # Parallel CPU data loading for RTX 4090
+        pin_memory=True  # Faster CPU → GPU transfers
+    )
+    print(f"DataLoader ready: {len(data_loader)} batches × {train_batch_size} cells")
     return data_loader
-    
+
+
+def _build_knn_graph(X_torch: torch.Tensor, k: int, device: str, save_path: Path) -> torch.Tensor:
+    """Build kNN graph with GPU attempt and CPU fallback.
+
+    Args:
+        X_torch:   Node feature tensor (n_cells, input_dim).
+        k:         Number of neighbours per cell.
+        device:    Preferred device ('cuda' or 'cpu').
+        save_path: Where to cache the edge_index tensor.
+
+    Returns:
+        edge_index tensor (2, n_edges) on CPU.
+    """
+    if device == 'cuda' and torch.cuda.is_available():
+        try:
+            print(f"Building kNN graph on GPU (k={k})...")
+            t0 = time.time()
+            X_gpu      = X_torch.to('cuda')
+            edge_index = knn_graph(X_gpu, k=k, loop=False)
+            edge_index = edge_index.cpu()
+            del X_gpu
+            torch.cuda.empty_cache()
+            print(f"GPU kNN graph built in {time.time() - t0:.1f}s")
+
+        except torch.cuda.OutOfMemoryError:
+            # 428k × 10k on GPU requires ~17 GB VRAM — may exceed 4090's 24 GB
+            # when other processes are running. CPU fallback is slower but safe.
+            print("GPU OOM during kNN graph construction — falling back to CPU.")
+            print("This may take 10–30 minutes for 428k cells. Consider k_neighbors=3 to speed up.")
+            torch.cuda.empty_cache()
+            t0         = time.time()
+            num_cores  = os.cpu_count()
+            edge_index = knn_graph(X_torch, k=k, loop=False, num_workers=num_cores)
+            print(f"CPU kNN graph built in {time.time() - t0:.1f}s")
+    else:
+        print(f"Building kNN graph on CPU (k={k}, workers={os.cpu_count()})...")
+        t0         = time.time()
+        edge_index = knn_graph(X_torch, k=k, loop=False, num_workers=os.cpu_count())
+        print(f"CPU kNN graph built in {time.time() - t0:.1f}s")
+
+    torch.save(edge_index, save_path)
+    print(f"kNN graph cached to {save_path}")
+    return edge_index
