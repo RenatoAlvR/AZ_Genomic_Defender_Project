@@ -128,6 +128,13 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[DataLoader,
         # ── Step 1: Load raw counts ───────────────────────────────────────────
         print("Loading 10x data (raw counts)...")
         adata = sc.read_10x_mtx(data_dir, var_names='gene_symbols', cache=False)
+        # Combined matrix was written cells×genes instead of standard genes×cells.
+        # Scanpy reads it transposed — detect and correct.
+        if adata.n_obs < adata.n_vars:
+            print(f"Matrix appears transposed ({adata.shape}) — correcting to (cells × genes)...")
+            adata = adata.T
+            print(f"Corrected shape: {adata.shape}")
+            
         print(f"Loaded raw data: {adata.shape}  ({adata.n_obs} cells × {adata.n_vars} genes)")
 
         # ── Step 2: HVG selection ON RAW COUNTS ──────────────────────────────
