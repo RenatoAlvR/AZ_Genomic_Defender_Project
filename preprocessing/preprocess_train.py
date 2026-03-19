@@ -13,6 +13,8 @@ from torch_geometric.nn import knn_graph
 from pathlib import Path
 from typing import Dict, Any, Union
 import scipy.sparse
+from scipy.io import mmread
+import gzip
 
 
 def save_and_visualize(adata: sc.AnnData, X: np.ndarray, data_dir: Path, dataset_name: str):
@@ -127,16 +129,30 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[DataLoader,
     else:
         # ── Step 1: Load raw counts ───────────────────────────────────────────
         print("Loading 10x data (raw counts)...")
-        adata = sc.read_10x_mtx(data_dir, var_names='gene_symbols', cache=False)
-        # Combined matrix was written cells×genes instead of standard genes×cells.
-        # Scanpy reads it transposed — detect and correct.
-        if adata.n_obs < adata.n_vars:
-            print(f"Matrix appears transposed ({adata.shape}) — correcting to (cells × genes)...")
-            adata = adata.T
-            print(f"Corrected shape: {adata.shape}")
-            
-        print(f"Loaded raw data: {adata.shape}  ({adata.n_obs} cells × {adata.n_vars} genes)")
+        print("Loading matrix manually (non-standard orientation)...")
 
+        with gzip.open(data_dir / 'matrix.mtx.gz', 'rb') as f:
+            X = mmread(f).tocsr()  # reads as (428024 × 33538) — cells × genes
+
+        # Our combine_data.py wrote cells as rows, so no transpose needed here.
+        # X is already (n_cells, n_genes).
+
+        barcodes = pd.read_csv(
+            data_dir / 'barcodes.tsv.gz', compression='gzip', header=None
+        ).values.flatten()
+
+        features = pd.read_csv(
+            data_dir / 'features.tsv.gz', compression='gzip',
+            sep='\t', header=None
+        )
+        gene_names = features[0].values  # column 0 = gene symbols
+
+        adata = sc.AnnData(
+            X=X,
+            obs=pd.DataFrame(index=barcodes),
+            var=pd.DataFrame(index=gene_names)
+        )
+        print(f"Loaded: {adata.shape}  ({adata.n_obs} cells × {adata.n_vars} genes)")
         # ── Step 2: HVG selection ON RAW COUNTS ──────────────────────────────
         # seurat_v3 uses a raw-count variance estimator (Poisson model).
         # Running it after normalization/log gives incorrect variance estimates
