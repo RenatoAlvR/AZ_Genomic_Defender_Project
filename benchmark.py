@@ -589,9 +589,23 @@ def run_benchmark(args):
     print("All models loaded.\n")
 
     # Load cached edge_index for GNN scoring
+    # NOTE: The cached edge_index covers the full 428k training set.
+    # We must rebuild it for the 85k test subset — node indices must match.
     edge_index_path = Path('preprocessing/final_data/edge_index.pt')
-    edge_index      = torch.load(edge_index_path, map_location='cpu')
-    print(f"GNN edge_index loaded: {edge_index.shape}\n")
+    print("Rebuilding GNN edge_index for test subset (85k cells)...")
+    from torch_geometric.nn import knn_graph
+    X_torch_test = torch.tensor(X_clean, dtype=torch.float32)
+    try:
+        X_gpu      = X_torch_test.to('cuda')
+        edge_index = knn_graph(X_gpu, k=5, loop=False).cpu()
+        del X_gpu; torch.cuda.empty_cache()
+        print(f"Test edge_index built on GPU: {edge_index.shape}")
+    except torch.cuda.OutOfMemoryError:
+        print("GPU OOM — building on CPU...")
+        edge_index = knn_graph(X_torch_test, k=5, loop=False,
+                               num_workers=4)
+        print(f"Test edge_index built on CPU: {edge_index.shape}")
+    del X_torch_test
 
     # ── Scoring helper ────────────────────────────────────────────────────────
     def score_all(X: np.ndarray, labels: np.ndarray, ei=None):
