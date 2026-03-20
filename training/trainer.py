@@ -45,9 +45,12 @@ def train(config_path: str, dataset_path: str, model_name: str, output_path: str
     batch_example = next(iter(data_loader))
     if isinstance(batch_example, (tuple, list)):
         print(f"DataLoader batch shape: {batch_example[0].shape}, type: {type(batch_example)}")
+    elif hasattr(batch_example, 'x'):
+        # torch_geometric Data object
+        print(f"DataLoader batch shape: nodes={batch_example.x.shape}, edges={batch_example.edge_index.shape}, type: {type(batch_example)}")
     else:
         print(f"DataLoader batch shape: {batch_example.shape}, type: {type(batch_example)}")
-
+        
     # ── Initialize model ──────────────────────────────────────────────────────
     logging.info(f"Initializing {model_name} model")
     if incremental and Path(output_path).exists():
