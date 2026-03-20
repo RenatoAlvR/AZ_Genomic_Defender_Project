@@ -118,40 +118,52 @@ class GNNAutoencoder(nn.Module):
             patience: int = 20,
             scheduler=None) -> None:
 
-        from torch_geometric.loader import NeighborLoader
+        from torch_geometric.utils import subgraph
 
-        # Extract the single Data object from the wrapper DataLoader
+        # Extract the single Data object
         graph_data = next(iter(data_loader))
+        n_nodes     = graph_data.x.shape[0]
+        batch_size  = 2048
+        n_batches   = (n_nodes + batch_size - 1) // batch_size
 
-        # NeighborLoader samples a fixed neighborhood per node per batch.
-        # num_neighbors=[5] means sample up to 5 neighbors at hop 1.
-        # batch_size=2048 nodes per step — safe for 24GB with 10k features.
-        train_loader = NeighborLoader(
-            graph_data,
-            num_neighbors=[5],       # 1-hop neighborhood, max 5 neighbors
-            batch_size=2048,
-            shuffle=True,
-            num_workers=4
-        )
-
-        best_loss = float('inf')
-        no_improve = 0
+        best_loss       = float('inf')
+        no_improve      = 0
         checkpoint_path = self.config.get('checkpoint_path', 'weights/gnn_ae_best.pt')
 
-        print(f"NeighborLoader ready: {len(train_loader)} batches of ~2048 nodes")
+        print(f"Manual node batching: {n_batches} batches of ~{batch_size} nodes")
+        print(f"No pyg-lib or torch-sparse required.")
 
         for epoch in range(epochs):
             self.train()
-            total_loss = 0.0
+            total_loss  = 0.0
             num_batches = 0
 
-            for batch in tqdm(train_loader, desc=f"Epoch {epoch:>4d}/{epochs}"):
-                x          = batch.x.to(self.device)
-                edge_index = batch.edge_index.to(self.device)
-                labels     = batch.labels.to(self.device) if hasattr(batch, 'labels') else None
+            # Shuffle node order each epoch
+            perm = torch.randperm(n_nodes)
+
+            for start in tqdm(range(0, n_nodes, batch_size),
+                            desc=f"Epoch {epoch:>4d}/{epochs}",
+                            total=n_batches):
+
+                batch_nodes = perm[start : start + batch_size]
+
+                # Extract induced subgraph for this batch
+                # subgraph() returns edges where BOTH endpoints are in batch_nodes
+                batch_edge_index, _ = subgraph(
+                    batch_nodes,
+                    graph_data.edge_index,
+                    relabel_nodes=True,   # reindex nodes 0..batch_size-1
+                    num_nodes=n_nodes
+                )
+
+                batch_x          = graph_data.x[batch_nodes].to(self.device)
+                batch_edge_index = batch_edge_index.to(self.device)
+                labels           = None
+                if hasattr(graph_data, 'labels'):
+                    labels = graph_data.labels[batch_nodes].to(self.device)
 
                 optimizer.zero_grad()
-                loss = self.compute_loss(x, edge_index, labels)
+                loss = self.compute_loss(batch_x, batch_edge_index, labels)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
                 optimizer.step()
@@ -159,7 +171,7 @@ class GNNAutoencoder(nn.Module):
                 total_loss  += loss.item()
                 num_batches += 1
 
-            avg_loss = total_loss / num_batches
+            avg_loss   = total_loss / num_batches
 
             if scheduler is not None:
                 scheduler.step()
