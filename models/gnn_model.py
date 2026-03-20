@@ -116,48 +116,46 @@ class GNNAutoencoder(nn.Module):
             optimizer: torch.optim.Optimizer,
             epochs: int,
             patience: int = 20,
-            scheduler: torch.optim.lr_scheduler._LRScheduler = None) -> None:
-        """Train the GNN-AE model.
+            scheduler=None) -> None:
 
-        Args:
-            data_loader: DataLoader wrapping a single torch_geometric Data object
-            optimizer:   Optimizer (AdamW recommended)
-            epochs:      Maximum training epochs
-            patience:    Early-stopping patience
-            scheduler:   Optional LR scheduler — stepped once per epoch
+        from torch_geometric.loader import NeighborLoader
 
-        Note on GNN training dynamics:
-            The GNN processes the ENTIRE cell graph in one pass per epoch (no mini-batching
-            of nodes). This means each epoch is one gradient step. The anomaly signal for
-            label-flip detection comes from neighbourhood inconsistency — a mislabelled cell
-            has neighbours with incompatible expression profiles, raising its reconstruction
-            error above the population baseline. Gradient clipping is critical here because
-            a single outlier node can produce disproportionately large gradients that destabilise
-            the graph convolution weights.
-        """
+        # Extract the single Data object from the wrapper DataLoader
+        graph_data = next(iter(data_loader))
+
+        # NeighborLoader samples a fixed neighborhood per node per batch.
+        # num_neighbors=[5] means sample up to 5 neighbors at hop 1.
+        # batch_size=2048 nodes per step — safe for 24GB with 10k features.
+        train_loader = NeighborLoader(
+            graph_data,
+            num_neighbors=[5],       # 1-hop neighborhood, max 5 neighbors
+            batch_size=2048,
+            shuffle=True,
+            num_workers=4
+        )
+
         best_loss = float('inf')
         no_improve = 0
         checkpoint_path = self.config.get('checkpoint_path', 'weights/gnn_ae_best.pt')
+
+        print(f"NeighborLoader ready: {len(train_loader)} batches of ~2048 nodes")
 
         for epoch in range(epochs):
             self.train()
             total_loss = 0.0
             num_batches = 0
 
-            for graph_data in tqdm(data_loader, desc=f"Epoch {epoch:>4d}/{epochs}"):
-                x          = graph_data.x.to(self.device)
-                edge_index = graph_data.edge_index.to(self.device)
-                labels     = graph_data.labels.to(self.device) if hasattr(graph_data, 'labels') else None
+            for batch in tqdm(train_loader, desc=f"Epoch {epoch:>4d}/{epochs}"):
+                x          = batch.x.to(self.device)
+                edge_index = batch.edge_index.to(self.device)
+                labels     = batch.labels.to(self.device) if hasattr(batch, 'labels') else None
 
                 optimizer.zero_grad()
                 loss = self.compute_loss(x, edge_index, labels)
                 loss.backward()
-
-                # Gradient clipping — GCN gradients propagate through all edges,
-                # making norm spikes likely on dense cell graphs
                 torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
-
                 optimizer.step()
+
                 total_loss  += loss.item()
                 num_batches += 1
 
@@ -169,7 +167,6 @@ class GNNAutoencoder(nn.Module):
             current_lr = optimizer.param_groups[0]['lr']
             print(f"Epoch {epoch:>4d} | Loss: {avg_loss:.6f} | LR: {current_lr:.2e}")
 
-            # ── Early stopping + best-model checkpoint ──────────────────────
             if avg_loss < best_loss:
                 best_loss  = avg_loss
                 no_improve = 0
