@@ -320,13 +320,50 @@ def score_vae(model, X: np.ndarray, batch_size: int = 2048) -> np.ndarray:
 
 
 def score_cae(model, X: np.ndarray, batch_size: int = 2048) -> np.ndarray:
-    """CAE anomaly score = combined embedding distance + classifier probability."""
-    return model.detect(X)
+    """CAE anomaly score = combined embedding distance + classifier probability.
+    Batched to prevent OOM on large datasets.
+    """
+    model.eval()
+    scores = []
+    import torch.nn.functional as F
+    with torch.no_grad():
+        for i in range(0, len(X), batch_size):
+            batch   = torch.tensor(X[i:i+batch_size], dtype=torch.float32,
+                                   device=model.device)
+            outputs = model(batch)
+            dist    = 1 - F.cosine_similarity(
+                outputs['proj'],
+                outputs['proj'].mean(dim=0, keepdim=True)
+            )
+            logits  = model.classifier(outputs['latent'])
+            cls_s   = torch.sigmoid(logits).squeeze(-1)
+            combined = 0.5 * dist + 0.5 * cls_s
+            scores.append(combined.cpu().numpy())
+            del batch, outputs, dist, logits, cls_s, combined
+            torch.cuda.empty_cache()
+    return np.concatenate(scores)
 
 
 def score_ddpm(model, X: np.ndarray, batch_size: int = 512) -> np.ndarray:
-    """DDPM anomaly score = reconstruction error at detection timestep."""
-    return model.detect(X)
+    """DDPM anomaly score = reconstruction error at detection timestep.
+    Batched explicitly to avoid OOM on large poisoned datasets.
+    """
+    model.eval()
+    scores = []
+    with torch.no_grad():
+        for i in range(0, len(X), batch_size):
+            batch = torch.tensor(X[i:i+batch_size], dtype=torch.float32,
+                                 device=model.config['device'])
+            t = torch.full((len(batch),), model.detection_timestep,
+                           device=model.config['device'], dtype=torch.long)
+            x_t          = model.q_sample(x_start=batch, t=t)
+            pred_noise   = model.model(x_t, t)
+            x_0_pred     = model.predict_start_from_noise(x_t, t, pred_noise)
+            err          = torch.mean((batch - x_0_pred) ** 2, dim=1)
+            scores.append(err.cpu().numpy())
+            del batch, x_t, pred_noise, x_0_pred, err
+            torch.cuda.empty_cache()
+    return np.concatenate(scores)
 
 
 def score_gnn(model, X: np.ndarray, edge_index: torch.Tensor,
@@ -618,7 +655,8 @@ def run_benchmark(args):
         print(f"  Scoring CAE   ({n:,} cells)...")
         s_cae    = score_cae(cae,   X)
         print(f"  Scoring DDPM  ({n:,} cells)...")
-        s_ddpm   = score_ddpm(ddpm, X)
+        s_ddpm   = score_ddpm(ddpm, X,
+                              batch_size=getattr(args, 'batch_size_ddpm', 512))
         print(f"  Scoring GNN   ({n:,} cells)...")
         s_gnn    = score_gnn(gnn,   X, ei_used)
         s_ens    = ensemble_score({'vae': s_vae, 'cae': s_cae,
@@ -731,7 +769,8 @@ def run_benchmark(args):
     # ══════════════════════════════════════════════════════════════════════════
     # SCENARIO 4 — SYNTHETIC INJECTION at 5%, 10%, 20%
     # ══════════════════════════════════════════════════════════════════════════
-    for frac in [0.05, 0.10, 0.20]:
+    if not getattr(args, 'skip_synthetic', False):
+      for frac in [0.05, 0.10, 0.20]:
         print(f"\n── SCENARIO: Synthetic Injection — {int(frac*100)}% contamination ──")
         X_p, labs, meta = attack_synthetic_injection(
             X_clean, poison_frac=frac, ddpm_model=ddpm, device=device
@@ -769,6 +808,8 @@ def run_benchmark(args):
                 'Accuracy':      m['accuracy'],
                 'FPR (limpio)':  m_clean[model_name]['fpr_clean'],
             })
+    else:
+        print("\n── SCENARIO: Synthetic Injection — SKIPPED (--skip_synthetic) ──")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SCENARIO 5 — TARGETED PATHWAY ATTACK at 10%, 20%, 30%
@@ -899,8 +940,12 @@ if __name__ == '__main__':
     parser.add_argument('--weights_dir',  type=str,
                         default='weights/',
                         help='Directory containing *_best.pt weight files')
-    parser.add_argument('--output_dir',   type=str,
+    parser.add_argument('--output_dir',      type=str,
                         default='results/benchmark/',
                         help='Output directory for results')
+    parser.add_argument('--skip_synthetic',  action='store_true',
+                        help='Skip synthetic injection scenarios (saves ~30 min, avoids OOM on 20pct)')
+    parser.add_argument('--batch_size_ddpm', type=int, default=512,
+                        help='Batch size for DDPM scoring (reduce if OOM, default 512)')
     args = parser.parse_args()
     run_benchmark(args)
