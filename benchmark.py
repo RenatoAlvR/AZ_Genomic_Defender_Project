@@ -470,8 +470,12 @@ def fpr_on_clean(scores: np.ndarray,
 
 def plot_roc_curves(results: list, output_path: Path):
     """Plot ROC curves for all scenarios, grouped by attack type."""
-    attack_types = list({r['attack'] for r in results if 'fpr_curve' in r['metrics']})
-    n_plots      = len(attack_types)
+    # Check any model within model_metrics for fpr_curve presence
+    def has_roc(r):
+        return any('fpr_curve' in m for m in r['model_metrics'].values())
+
+    attack_types = list({r['attack'] for r in results if has_roc(r)})
+    n_plots      = max(len(attack_types), 1)
 
     fig, axes = plt.subplots(1, n_plots, figsize=(6 * n_plots, 5))
     if n_plots == 1:
