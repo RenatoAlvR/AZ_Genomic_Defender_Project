@@ -13,8 +13,6 @@ from torch_geometric.nn import knn_graph
 from pathlib import Path
 from typing import Dict, Any, Union
 import scipy.sparse
-from scipy.io import mmread
-import gzip
 
 
 def save_and_visualize(adata: sc.AnnData, X: np.ndarray, data_dir: Path, dataset_name: str):
@@ -115,6 +113,61 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[DataLoader,
     hvg_path      = output_dir / 'hvg_genes.txt'
     graph_path    = output_dir / 'edge_index.pt'
 
+    # ── Shortcut: pre-computed poisoned dataset (attack scripts output) ──────────
+    # Attack scripts produce data.npy + labels.npy directly in the data_dir.
+    # If these exist we skip all preprocessing — the data is already in the
+    # correct scaled HVG space (it was derived from the master preprocessed data).
+    direct_data_path   = data_dir / 'data.npy'
+    direct_labels_path = data_dir / 'labels.npy'
+
+    if direct_data_path.exists():
+        print(f"Found pre-computed dataset at {direct_data_path} — skipping preprocessing.")
+        X = np.load(direct_data_path).astype(np.float32)
+        if X.shape[1] != input_dim:
+            raise ValueError(
+                f"Pre-computed data has {X.shape[1]} features but config expects {input_dim}. "
+                f"Ensure the poisoned dataset was generated from the same HVG set."
+            )
+        labels = None
+        if direct_labels_path.exists():
+            labels = np.load(direct_labels_path).astype(np.int64)
+            print(f"Labels loaded: {labels.shape[0]:,} cells — "
+                  f"{labels.sum():,} poisoned ({labels.mean()*100:.1f}%)")
+        else:
+            print("No labels.npy found — training unsupervised (no classification head).")
+
+        X_torch = torch.tensor(X, dtype=torch.float32)
+
+        if model == 'gnn_ae':
+            graph_path = data_dir / 'edge_index.pt'
+            if graph_path.exists():
+                print(f"Loading cached kNN graph from {graph_path}")
+                edge_index = torch.load(graph_path)
+            else:
+                edge_index = _build_knn_graph(X_torch, k_neighbors, device, graph_path)
+            gnn_data = Data(x=X_torch, edge_index=edge_index)
+            if labels is not None:
+                gnn_data.labels = torch.tensor(labels, dtype=torch.long)
+            return gnn_data
+
+        if labels is not None:
+            labels_torch = torch.tensor(labels, dtype=torch.long)
+            dataset = TensorDataset(X_torch, labels_torch)
+        else:
+            dataset = TensorDataset(X_torch)
+
+        data_loader = DataLoader(
+            dataset,
+            batch_size=train_batch_size,
+            shuffle=True,
+            drop_last=True,
+            num_workers=4,
+            pin_memory=True
+        )
+        print(f"DataLoader ready: {len(data_loader)} batches × {train_batch_size} cells"
+              + (" (with labels)" if labels is not None else " (unsupervised)"))
+        return data_loader
+
     # ── Cache hit: skip preprocessing if outputs already exist ────────────────
     if data_path.exists() and hvg_path.exists() and not raw:
         print(f"Loading cached preprocessed data from {data_path}")
@@ -129,30 +182,9 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[DataLoader,
     else:
         # ── Step 1: Load raw counts ───────────────────────────────────────────
         print("Loading 10x data (raw counts)...")
-        print("Loading matrix manually (non-standard orientation)...")
+        adata = sc.read_10x_mtx(data_dir, var_names='gene_symbols', cache=False)
+        print(f"Loaded raw data: {adata.shape}  ({adata.n_obs} cells × {adata.n_vars} genes)")
 
-        with gzip.open(data_dir / 'matrix.mtx.gz', 'rb') as f:
-            X = mmread(f).tocsr()  # reads as (428024 × 33538) — cells × genes
-
-        # Our combine_data.py wrote cells as rows, so no transpose needed here.
-        # X is already (n_cells, n_genes).
-
-        barcodes = pd.read_csv(
-            data_dir / 'barcodes.tsv.gz', compression='gzip', header=None
-        ).values.flatten()
-
-        features = pd.read_csv(
-            data_dir / 'features.tsv.gz', compression='gzip',
-            sep='\t', header=None
-        )
-        gene_names = features[0].values  # column 0 = gene symbols
-
-        adata = sc.AnnData(
-            X=X,
-            obs=pd.DataFrame(index=barcodes),
-            var=pd.DataFrame(index=gene_names)
-        )
-        print(f"Loaded: {adata.shape}  ({adata.n_obs} cells × {adata.n_vars} genes)")
         # ── Step 2: HVG selection ON RAW COUNTS ──────────────────────────────
         # seurat_v3 uses a raw-count variance estimator (Poisson model).
         # Running it after normalization/log gives incorrect variance estimates
@@ -192,14 +224,6 @@ def preprocess_train(data_dir: str, config: Dict[str, Any]) -> Union[DataLoader,
         # anomaly score distribution and mask subtle attacks.
         print("Scaling (zero mean, unit variance, max_value=10)...")
         sc.pp.scale(adata, max_value=10)
-
-        # Save per-gene scaling parameters so detection uses identical transformation
-        scaler_stats = {
-            'mean': adata.var['mean'].values,      # scanpy stores these in adata.var after scale
-            'std':  adata.var['std'].values
-        }
-        np.save(output_dir / 'scaler_stats.npy', scaler_stats)
-        print(f"Saved scaler stats to {output_dir / 'scaler_stats.npy'}")
 
         # ── Step 6: Extract final dense array ────────────────────────────────
         X = adata.X if isinstance(adata.X, np.ndarray) else np.array(adata.X)
