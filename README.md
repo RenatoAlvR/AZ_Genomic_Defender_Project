@@ -509,11 +509,11 @@ results/detection_run1/
 ### Gene Signatures Used in Attack Scripts
 - **Khozyainova, A.A. et al. (2023).** Complex Analysis of Single-Cell RNA Sequencing Data. *Biochemistry (Moscow)*.
   → CTLA4, IL6, TNF, CXCL13 linked to autoimmune disease / SLE / RA gene signatures in breast tissue context.
-  → PMC: [PMC10258562](https://pmc.ncbi.nlm.nih.gov/articles/PMC10258562/) (CPA / Lotfollahi et al. 2023, same PMC link used for scRNA-seq perturbation reference)
+  → DOI: [10.1134/S0006297923020074](https://doi.org/10.1134/S0006297923020074) · PubMed: [37072324](https://pubmed.ncbi.nlm.nih.gov/37072324/) · PMC: [PMC10000364](https://pmc.ncbi.nlm.nih.gov/articles/PMC10000364/)
 
-- **Hao, Y. et al. (2024).** Dictionary learning for integrative, multimodal and scalable single-cell analysis. *Nature Methods* (Seurat v5).
+- **Hao, Y. et al. (2024).** Dictionary learning for integrative, multimodal and scalable single-cell analysis. *Nature Biotechnology*, 42, 293–304.
   → HVG selection method (seurat_v3 flavor) used in preprocessing pipeline.
-  → DOI: [10.1038/s41592-024-02281-y](https://doi.org/10.1038/s41592-024-02281-y)
+  → DOI: [10.1038/s41587-023-01767-y](https://doi.org/10.1038/s41587-023-01767-y) · PMC: [PMC10928517](https://pmc.ncbi.nlm.nih.gov/articles/PMC10928517/)
 
 - **Wolf, F.A. et al. (2018).** SCANPY: large-scale single-cell gene expression data analysis. *Genome Biology*.
   → DOI: [10.1186/s13059-017-1382-0](https://doi.org/10.1186/s13059-017-1382-0)
@@ -527,13 +527,15 @@ results/detection_run1/
   → Institutional recognition of genomic data as critical infrastructure requiring cybersecurity protection.
   → DOI: [10.6028/NIST.IR.8432](https://doi.org/10.6028/NIST.IR.8432)
 
-- **23andMe Data Breach (2023).** 6.9 million user genetic profiles compromised via credential stuffing. [FTC Report](https://www.ftc.gov/business-guidance/blog/2024/04/23andme-data-breach-reminder-about-security-basics)
+- **23andMe Data Breach (2023).** ~7 million user genetic profiles compromised via credential stuffing (April–October 2023). Official joint investigation by the Privacy Commissioner of Canada and the UK Information Commissioner's Office (2025).
+  → [priv.gc.ca — Joint Investigation Report](https://www.priv.gc.ca/en/opc-actions-and-decisions/investigations/investigations-into-businesses/2025/pipeda-2025-001/)
+  → Summary: [priv.gc.ca — Backgrounder](https://www.priv.gc.ca/en/opc-news/news-and-announcements/2025/bg_23andme_250617/)
 
 ### Foundational Works That Motivated This Research
 
-- **Sheldon, J., Morris, T., Brown, I., Pape, P., Ross, S., Zhu, F. & Whitlow, P.** Genomics Cybersecurity Concerns, Challenges, and a Modular Test Lab. *University of Alabama in Huntsville / HudsonAlpha Institute for Biotechnology.*
+- **Sheldon, J., Morris, T., Brown, I., Pape, P., Ross, S., Zhu, F. & Whitlow, P. (2024).** Genomics Cybersecurity Concerns, Challenges, and a Modular Test Lab. *ACM Southeast Conference 2024 (ACMSE '24)*, pp. 86–94.
   → Building on NIST IR 8432, this work surveyed the state of cybersecurity research in genomics through a field study at HudsonAlpha Institute for Biotechnology — a real working genomics lab. It identified the full life cycle of genomic data as an attack surface and proposed a biocybersecurity test lab design for evaluating new tools. The field study confirmed that current genomics labs have minimal dedicated cybersecurity tooling for data integrity verification, directly motivating the need for a tool like GenomeDefender.
-  → [HudsonAlpha Institute for Biotechnology](https://www.hudsonalpha.org/)
+  → DOI: [10.1145/3603287.3651215](https://doi.org/10.1145/3603287.3651215) · ACM DL: [dl.acm.org/doi/10.1145/3603287.3651215](https://dl.acm.org/doi/10.1145/3603287.3651215)
 
 - **Alber, D.A., Yang, Z., Alyakin, A. et al. (2025).** Medical large language models are vulnerable to data-poisoning attacks. *Nature Medicine*, 31(2), 618–626.
   → This paper demonstrated that replacing as little as **0.001% of training tokens** with medical misinformation in The Pile (a major LLM training corpus) produces models that propagate medical errors while still matching clean models on standard benchmarks — poisoned models were indistinguishable from clean ones under conventional evaluation. This is the direct analogue for genomic data: a poisoning attack that is invisible to standard quality metrics but causes systematic clinical harm at inference time. This work directly motivated GenomeDefender's core design goal: providing an integrity check that goes beyond standard QC pipelines.
