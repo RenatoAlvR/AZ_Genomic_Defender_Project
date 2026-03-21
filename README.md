@@ -479,40 +479,65 @@ results/detection_run1/
 
 ## 🔬 Scientific Basis
 
-### Dataset
-- **Wu, S.Z. et al. (2021).** A single-cell and spatially resolved atlas of human breast cancers. *Nature Genetics*, 53, 1334–1347. [GSE161529]
-  → Primary training dataset: 428,024 cells, 69 samples, 3 tissue types (healthy, cancerous, neoplastic).
+### Primary Dataset Papers
+
+- **Wu, S.Z., Al-Eryani, G., Roden, D.L. et al. (2021).** A single-cell and spatially resolved atlas of human breast cancers. *Nature Genetics*, 53, 1334–1347.
+  → **Primary source for training data.** Single-cell and spatially resolved transcriptomics of human breast cancers. GenomeDefender is trained on the scRNA-seq component of this atlas (GSE161529): 428,024 cells from 69 specimens covering TN, HER2+, ER+, BRCA1 pre-neoplastic, and normal breast tissue.
+  → DOI: [10.1038/s41588-021-00911-1](https://doi.org/10.1038/s41588-021-00911-1) · GEO: [GSE161529](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE161529) · PMC: [PMC9044823](https://pmc.ncbi.nlm.nih.gov/articles/PMC9044823/)
+
+- **Chen, Y., Pal, B., Lindeman, G.J., Visvader, J.E. & Smyth, G.K. (2022).** R code and downstream analysis objects for the scRNA-seq atlas of normal and tumorigenic human breast tissue. *Scientific Data*, 9, 96.
+  → **Dataset descriptor paper.** Provides complete cell annotation, quality filtering thresholds, and R code to reproduce all analyses of the ScBrAtlas (the same 428,024 cells from 69 surgical specimens / 55 patients used as GenomeDefender's training data). This companion paper was the practical entry point for understanding the sample structure: 8 normal pre-menopausal, 3 normal post-menopausal, 4 BRCA1 pre-neoplastic, 4 TN BRCA1 tumors, 4 TN tumors, 6 HER2+ tumors, 16+ ER+ tumors, and paired lymph nodes.
+  → DOI: [10.1038/s41597-022-01236-2](https://doi.org/10.1038/s41597-022-01236-2)
 
 ### Data Poisoning
-- **Biggio, B. & Roli, F. (2018).** Wild patterns: Ten years after the rise of adversarial machine learning. *Pattern Recognition*.
+- **Biggio, B. & Roli, F. (2018).** Wild patterns: Ten years after the rise of adversarial machine learning. *Pattern Recognition*, 84, 317–331.
+  → DOI: [10.1016/j.patcog.2018.07.023](https://doi.org/10.1016/j.patcog.2018.07.023) · arXiv: [1712.03141](https://arxiv.org/abs/1712.03141)
+
 - **Wallace, E. et al. (2021).** Stronger Data Poisoning Attacks Break Data Sanitization Defenses. *Machine Learning*.
+  → DOI: [10.1007/s10994-021-06119-y](https://link.springer.com/article/10.1007/s10994-021-06119-y)
+
 - **OWASP ML Security Top 10 (2023).** ML02:2023 Data Poisoning Attack.
+  → [owasp.org/www-project-machine-learning-security-top-10](https://owasp.org/www-project-machine-learning-security-top-10/)
 
 ### Anomaly Detection Theory
-- **Chandola, V. et al. (2009).** Anomaly Detection: A Survey. *ACM Computing Surveys*.
-- **Ruff, L. et al. (2021).** A Unifying Review of Deep and Shallow Anomaly Detection. *Proceedings of the IEEE*.
+- **Chandola, V., Banerjee, A. & Kumar, V. (2009).** Anomaly Detection: A Survey. *ACM Computing Surveys*, 41(3), Article 15.
+  → DOI: [10.1145/1541880.1541882](https://doi.org/10.1145/1541880.1541882)
+
+- **Ruff, L. et al. (2021).** A Unifying Review of Deep and Shallow Anomaly Detection. *Proceedings of the IEEE*, 109(5), 756–795.
+  → DOI: [10.1109/JPROC.2021.3052449](https://doi.org/10.1109/JPROC.2021.3052449) · IEEE Xplore: [9347460](https://ieeexplore.ieee.org/document/9347460/)
 
 ### Gene Signatures Used in Attack Scripts
 - **Khozyainova, A.A. et al. (2023).** Complex Analysis of Single-Cell RNA Sequencing Data. *Biochemistry (Moscow)*.
   → CTLA4, IL6, TNF, CXCL13 linked to autoimmune disease / SLE / RA gene signatures in breast tissue context.
+  → PMC: [PMC10258562](https://pmc.ncbi.nlm.nih.gov/articles/PMC10258562/) (CPA / Lotfollahi et al. 2023, same PMC link used for scRNA-seq perturbation reference)
+
 - **Hao, Y. et al. (2024).** Dictionary learning for integrative, multimodal and scalable single-cell analysis. *Nature Methods* (Seurat v5).
-  → HVG selection method (seurat_v3 flavor).
+  → HVG selection method (seurat_v3 flavor) used in preprocessing pipeline.
+  → DOI: [10.1038/s41592-024-02281-y](https://doi.org/10.1038/s41592-024-02281-y)
+
 - **Wolf, F.A. et al. (2018).** SCANPY: large-scale single-cell gene expression data analysis. *Genome Biology*.
+  → DOI: [10.1186/s13059-017-1382-0](https://doi.org/10.1186/s13059-017-1382-0)
 
 ### Bio-Cybersecurity Precedents
 - **Ney, P. et al. (2017).** Computer Security, Privacy, and DNA Sequencing. *USENIX Security Symposium*.
-  → First demonstration of malicious code embedded in synthetic DNA.
+  → First demonstration of malicious code embedded in synthetic DNA strands used to compromise sequencing analysis software.
+  → [usenix.org/conference/usenixsecurity17/technical-sessions/presentation/ney](https://www.usenix.org/conference/usenixsecurity17/technical-sessions/presentation/ney)
+
 - **NIST IR 8432 (2023).** Cybersecurity of Genomic Data. National Institute of Standards and Technology.
   → Institutional recognition of genomic data as critical infrastructure requiring cybersecurity protection.
-- **23andMe Data Breach (2023).** 6.9 million user genetic profiles compromised via credential stuffing.
+  → DOI: [10.6028/NIST.IR.8432](https://doi.org/10.6028/NIST.IR.8432)
+
+- **23andMe Data Breach (2023).** 6.9 million user genetic profiles compromised via credential stuffing. [FTC Report](https://www.ftc.gov/business-guidance/blog/2024/04/23andme-data-breach-reminder-about-security-basics)
 
 ### Foundational Works That Motivated This Research
 
 - **Sheldon, J., Morris, T., Brown, I., Pape, P., Ross, S., Zhu, F. & Whitlow, P.** Genomics Cybersecurity Concerns, Challenges, and a Modular Test Lab. *University of Alabama in Huntsville / HudsonAlpha Institute for Biotechnology.*
-  → Building on NIST IR 8432, this work surveyed the state of cybersecurity research in genomics through a field study at HudsonAlpha Institute for Biotechnology — a real working genomics lab. It identified the full life cycle of genomic data as an attack surface and proposed a biocybersecurity test lab design. This paper directly motivated GenomeDefender's threat model: an attacker with write access to a genomics pipeline at any point in the data life cycle (collection, processing, storage, sharing) can corrupt downstream analyses. The field study confirmed that current labs have minimal dedicated cybersecurity tooling for data integrity verification.
+  → Building on NIST IR 8432, this work surveyed the state of cybersecurity research in genomics through a field study at HudsonAlpha Institute for Biotechnology — a real working genomics lab. It identified the full life cycle of genomic data as an attack surface and proposed a biocybersecurity test lab design for evaluating new tools. The field study confirmed that current genomics labs have minimal dedicated cybersecurity tooling for data integrity verification, directly motivating the need for a tool like GenomeDefender.
+  → [HudsonAlpha Institute for Biotechnology](https://www.hudsonalpha.org/)
 
-- **Alber, D.A., Yang, Z., Alyakin, A., et al. (2024).** Medical large language models are vulnerable to data-poisoning attacks. *Nature Medicine.*
-  → This paper demonstrated that replacing as little as **0.001% of training tokens** with medical misinformation in The Pile (a major LLM training corpus) produces models that propagate medical errors while still matching clean models on standard benchmarks. This is the direct analogue for genomic data: a poisoning attack that is invisible to standard quality metrics but causes systematic harm at inference time. The finding that corrupted models are indistinguishable from clean ones on conventional evaluation is precisely the gap GenomeDefender is designed to close — but for scRNA-seq expression matrices rather than text corpora. This work also proposed knowledge-graph-based mitigation (F1 = 85.7%), conceptually related to our approach of using a trusted biological baseline as the reference distribution.
+- **Alber, D.A., Yang, Z., Alyakin, A. et al. (2025).** Medical large language models are vulnerable to data-poisoning attacks. *Nature Medicine*, 31(2), 618–626.
+  → This paper demonstrated that replacing as little as **0.001% of training tokens** with medical misinformation in The Pile (a major LLM training corpus) produces models that propagate medical errors while still matching clean models on standard benchmarks — poisoned models were indistinguishable from clean ones under conventional evaluation. This is the direct analogue for genomic data: a poisoning attack that is invisible to standard quality metrics but causes systematic clinical harm at inference time. This work directly motivated GenomeDefender's core design goal: providing an integrity check that goes beyond standard QC pipelines.
+  → DOI: [10.1038/s41591-024-03445-1](https://doi.org/10.1038/s41591-024-03445-1) · PMC: [PMC11835729](https://pmc.ncbi.nlm.nih.gov/articles/PMC11835729/) · GitHub: [nyuolab/llm-knowledge-graphs](https://github.com/nyuolab/llm-knowledge-graphs)
 
 ---
 
