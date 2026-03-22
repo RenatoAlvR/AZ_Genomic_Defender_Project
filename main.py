@@ -97,6 +97,9 @@ def main():
                         help='Model weights path (required for detect/generate)')
     parser.add_argument('--incremental', action='store_true',
                         help='Continue training from weights')
+    parser.add_argument('--base_weights', type=str, default=None,
+                        help='Source weights to fine-tune from (used with --incremental). '
+                        'If not set, loads from --output path.')
     parser.add_argument('--threshold', type=float, default=None,
                         help='Detection threshold (0-1 quantile)')
     parser.add_argument('--no-report', action='store_true',
@@ -130,7 +133,7 @@ def main():
             raise ValueError(f"Dataset directory {dataset_dir} does not exist")
         
         logger.info(f"Starting training for {args.model.upper()} on {args.dataset}")
-        train(args.config, args.dataset, args.model, args.output, args.incremental)
+        train(args.config, args.dataset, args.model, args.output, args.incremental, args.base_weights)
         logger.info("Training completed successfully")
         audit.log_training(args.model, args.dataset, config.get('epochs', 100), 0.0)
 
