@@ -150,7 +150,7 @@ def run_autoimmune_injection(args):
     # Sub-select a fraction of target patients
     # In a realistic attack, only SOME patients are poisoned — not all
     # This makes the attack harder to detect at the population level
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(args.seed)
     target_idx = np.where(target_mask)[0]
 
     # Group by patient to attack whole patients, not random cells
@@ -217,6 +217,7 @@ def run_autoimmune_injection(args):
 
     meta = {
         'attack':               'autoimmune_injection',
+        'seed':                 args.seed,
         'description':          'Subset of cancer patients injected with autoimmune expression signature',
         'clinical_goal':        'Mislead clinicians/AI into diagnosing autoimmune disease in cancer patients',
         'target_subtype':       args.target_subtype,
@@ -268,5 +269,9 @@ if __name__ == '__main__':
                         help='Amplification factor for autoimmune markers (default: 3.5)')
     parser.add_argument('--down_factor',      type=float, default=0.4,
                         help='Partial suppression for cancer markers (default: 0.4)')
+    parser.add_argument('--seed',             type=int, default=42,
+                        help='Random seed controlling which patients are selected for attack '
+                             '(default: 42). Change this to generate a different but '
+                             'equally valid poisoned dataset for train/test separation.')
     args = parser.parse_args()
     run_autoimmune_injection(args)

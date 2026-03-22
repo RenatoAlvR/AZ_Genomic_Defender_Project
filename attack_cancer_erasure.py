@@ -240,5 +240,10 @@ if __name__ == '__main__':
                         help='Suppression factor for cancer markers (default 0.20 = reduce to 20%%)')
     parser.add_argument('--up_factor',   type=float, default=3.0,
                         help='Amplification factor for normal markers (default 3.0)')
+    parser.add_argument('--seed',        type=int, default=42,
+                        help='Random seed for reproducibility (default: 42). '
+                             'Note: Cancer Erasure targets ALL cancer cells deterministically '
+                             '— seed does not change which cells are poisoned, only future '
+                             'random extensions. Change seed to tag different output runs.')
     args = parser.parse_args()
     run_cancer_erasure(args)
