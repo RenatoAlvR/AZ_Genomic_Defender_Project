@@ -107,9 +107,9 @@ class GNNAutoencoder(nn.Module):
         loss = self.loss_weight_recon * recon_loss
         if labels is not None:
             labels = labels.to(self.device)
-            logits = self.classifier(outputs['latent'].mean(dim=0, keepdim=True))  # Mean pooling for graph-level classification
+            logits = self.classifier(outputs['latent']
             cls_loss = F.binary_cross_entropy_with_logits(logits.squeeze(-1), labels.float())
-            loss += cls_loss  # Combine reconstruction and classification loss
+            loss += self.config.get('cls_weight', 0.1) * cls_loss
         return loss
 
     def fit(self, data_loader,
