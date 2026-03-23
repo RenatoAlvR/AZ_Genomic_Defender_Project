@@ -12,6 +12,7 @@ edge_dropout: 0.2       # Regularisation: random edge drop during training impro
 
 device: cuda
 loss_weight_recon: 1.0
+cls_weight: 2.0
 
 detection_threshold: 0.95
 batch_size: 10000       # Preprocessing batch size

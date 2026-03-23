@@ -13,7 +13,7 @@ device: cuda
 loss_weights:
   recon: 0.8            # Reconstruction dominates — detection is based on recon error
   kl: 0.2              # KL regularises the latent space (annealed from 0 in fit())
-  cls: 1.0              # Classification head weight
+  cls: 200.0              # Classification head weight
 
 detection_threshold: 0.95
 batch_size: 10000       # Preprocessing batch size
@@ -21,5 +21,5 @@ k_neighbors: 5          # Unused for VAE
 train_batch_size: 512   # RTX 4090 safe with 10k input + 1024 hidden (was 32)
 epochs: 200
 learning_rate: 0.0003   # AdamW tuned — original 0.00005 was too conservative for batch=512
-patience: 25
+patience: 50
 raw: False
