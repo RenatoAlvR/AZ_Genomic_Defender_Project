@@ -119,6 +119,7 @@ def train(config_path: str, dataset_path: str, model_name: str, output_path: str
     if model_name not in model_map:
         raise ValueError(f"Unsupported model: {model_name}")
     model = model_map[model_name]()
+    model.config['checkpoint_path'] = best_weights_path
 
     # ── Optimizer: AdamW ──────────────────────────────────────────────────────
     optimizer = torch.optim.AdamW(

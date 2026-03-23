@@ -199,6 +199,16 @@ class ContrastiveAutoencoder(nn.Module):
             num_batches = 0
 
             for batch_data in tqdm(data_loader, desc=f"Epoch {epoch:>4d}/{epochs}"):
+                # ── ADD THIS DEBUG BLOCK — remove after one run ──
+                if epoch == 0 and num_batches == 0:
+                    print(f"DEBUG batch_data type: {type(batch_data)}")
+                    print(f"DEBUG batch_data len:  {len(batch_data)}")
+                    print(f"DEBUG batch_data[0] shape: {batch_data[0].shape}")
+                    if len(batch_data) > 1:
+                        print(f"DEBUG batch_data[1] shape: {batch_data[1].shape}")
+                    else:
+                        print("DEBUG: only 1 element in batch — labels NOT being passed")
+                # ── END DEBUG ──
                 if isinstance(batch_data, (tuple, list)) and len(batch_data) == 2:
                     x, labels = batch_data
                 else:
