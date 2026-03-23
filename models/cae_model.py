@@ -266,7 +266,7 @@ class ContrastiveAutoencoder(nn.Module):
 
             current_lr = optimizer.param_groups[0]['lr']
             print(f"Epoch {epoch:>4d} | Loss: {avg_loss:.6f} "
-                  f"(Recon: {avg_recon:.4f} | Cont: {avg_cont:.4f} | Cls: {avg_cls:.4f}) "
+                  f"(Recon: {avg_recon:.4f} | Cont: {avg_cont:.4f} | Cls: {avg_cls:.6f}) "
                   f"| LR: {current_lr:.2e}")
 
             # ── Early stopping + best-model checkpoint ──────────────────────

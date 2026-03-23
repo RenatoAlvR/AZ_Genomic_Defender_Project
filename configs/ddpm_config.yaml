@@ -24,10 +24,15 @@ detection_timestep: 500
 generation_timestep: 500
 detection_threshold: 0.95
 
+# Classification head weight.
+# Diffusion loss ~0.8, BCE cls loss ~0.3-0.7.
+# cls_weight: 5.0 brings them to the same order of magnitude.
+cls_weight: 5.0
+
 device: cuda
 batch_size: 10000       # Preprocessing batch size
 k_neighbors: 5          # Unused for DDPM
-train_batch_size: 1024  # RTX 4090 optimal for MLP + 10k input (was 8 — critically small)
+train_batch_size: 1024  # RTX 4090 optimal for MLP + 10k input
 epochs: 200
 learning_rate: 0.0003
 patience: 25
