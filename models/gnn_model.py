@@ -107,7 +107,7 @@ class GNNAutoencoder(nn.Module):
         loss = self.loss_weight_recon * recon_loss
         if labels is not None:
             labels = labels.to(self.device)
-            logits = self.classifier(outputs['latent']
+            logits = self.classifier(outputs['latent'])
             cls_loss = F.binary_cross_entropy_with_logits(logits.squeeze(-1), labels.float())
             loss += self.config.get('cls_weight', 0.1) * cls_loss
         return loss
