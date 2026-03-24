@@ -186,20 +186,28 @@ def run_eval(args):
     vae.eval(); cae.eval(); ddpm.eval(); gnn.eval()
     print(f"All models loaded (suffix: '{suffix}').\n")
 
-    # ── Build GNN edge index for this dataset ──────────────────────────────
-    print("Building GNN edge index for this dataset...")
-    from torch_geometric.nn import knn_graph
-    X_torch = torch.tensor(X, dtype=torch.float32)
-    try:
-        X_gpu      = X_torch.to('cuda')
-        edge_index = knn_graph(X_gpu, k=5, loop=False).cpu()
-        del X_gpu; torch.cuda.empty_cache()
-        print(f"  Edge index built on GPU: {edge_index.shape}")
-    except torch.cuda.OutOfMemoryError:
-        print("  GPU OOM — building on CPU...")
-        edge_index = knn_graph(X_torch, k=5, loop=False,
-                               num_workers=4)
-        print(f"  Edge index built on CPU: {edge_index.shape}")
+    # ── Load or build GNN edge index ──────────────────────────────────────
+    cached_ei = poisoned_dir / 'edge_index.pt'
+    if cached_ei.exists():
+        print(f"Loading cached edge index from {cached_ei}...")
+        edge_index = torch.load(cached_ei, map_location='cpu')
+        print(f"  Edge index loaded: {edge_index.shape}")
+    else:
+        print("No cached edge index found — building from scratch...")
+        from torch_geometric.nn import knn_graph
+        X_torch = torch.tensor(X, dtype=torch.float32)
+        try:
+            X_gpu      = X_torch.to('cuda')
+            edge_index = knn_graph(X_gpu, k=5, loop=False).cpu()
+            del X_gpu; torch.cuda.empty_cache()
+            print(f"  Edge index built on GPU: {edge_index.shape}")
+        except torch.cuda.OutOfMemoryError:
+            print("  GPU OOM — building on CPU...")
+            edge_index = knn_graph(X_torch, k=5, loop=False, num_workers=4)
+            print(f"  Edge index built on CPU: {edge_index.shape}")
+        # Cache it for future runs
+        torch.save(edge_index, cached_ei)
+        print(f"  Cached to {cached_ei}")
 
     # ── Score all models ───────────────────────────────────────────────────
     print("\nScoring...")
