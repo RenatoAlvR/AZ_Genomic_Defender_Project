@@ -23,3 +23,4 @@ epochs: 200
 learning_rate: 0.0003   # AdamW tuned — original 0.00005 was too conservative for batch=512
 patience: 50
 raw: False
+incremental: True

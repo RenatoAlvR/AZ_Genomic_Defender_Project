@@ -159,7 +159,12 @@ class VariationalAutoencoder(nn.Module):
         checkpoint_path = self.config.get('checkpoint_path', 'weights/vae_best.pt')
 
         # KL annealing: ramp up KL weight over first 20% of training
-        kl_warmup_epochs = max(1, int(epochs * 0.2))
+        if self.config.get('incremental', False):
+            # Skip annealing — start from full KL weight immediately
+            kl_warmup_epochs = 1
+        else:
+            kl_warmup_epochs = max(1, int(epochs * 0.2))
+            
         base_kl_weight   = self.loss_weights['kl']
 
         for epoch in range(epochs):
