@@ -94,34 +94,36 @@ def score_ddpm(model, X, batch_size=256):
             x0    = model.predict_start_from_noise(x_t, t, pred)
             err   = torch.mean((b - x0)**2, dim=1)
             
-            # 2. Classifier Pass
-            # NOTE: Adapt the input here based on what your classifier head expects.
-            # If it processes the raw input, leave it as 'b'. 
-            # If it processes the noisy state or denoised state, change to 'x_t' or 'x0'.
-            cls_logits = model.classifier(b) 
-            cls_probs  = torch.sigmoid(cls_logits).squeeze(-1)
+            # 2. Classifier Pass (Extracting the 2048-dim latent space first)
+            if hasattr(model.model, 'encode'):
+                latent     = model.model.encode(x_t, t) 
+                cls_logits = model.classifier(latent).squeeze(-1)
+                cls_probs  = torch.sigmoid(cls_logits)
+            else:
+                cls_probs  = torch.zeros(len(b), device=b.device)
             
             all_err.append(err.cpu().numpy())
             all_cls.append(cls_probs.cpu().numpy())
             
-            del b, x_t, pred, x0, err, cls_logits, cls_probs; torch.cuda.empty_cache()
+            del b, x_t, pred, x0, err
+            if hasattr(model.model, 'encode'):
+                del latent, cls_logits, cls_probs
+            torch.cuda.empty_cache()
             
-    # Concatenate all batches
     err_arr = np.concatenate(all_err)
     cls_arr = np.concatenate(all_cls)
     
     # 3. Global Normalization
-    # Z-score normalize both arrays so the unbounded MSE doesn't drown out the 0-1 probabilities.
     err_norm = (err_arr - err_arr.mean()) / (err_arr.std() + 1e-8)
-    cls_norm = (cls_arr - cls_arr.mean()) / (cls_arr.std() + 1e-8)
     
-    # 4. Blend the Scores
-    # We heavily weight the classifier (80%) since the pure diffusion reconstruction 
-    # previously inverted the AUROC, but we keep a 20% structural penalty from the MSE.
-    combined_scores = 0.2 * err_norm + 0.8 * cls_norm
-    
+    if hasattr(model.model, 'encode'):
+        cls_norm = (cls_arr - cls_arr.mean()) / (cls_arr.std() + 1e-8)
+        # 4. Blend: 20% Reconstruction, 80% Classifier
+        combined_scores = 0.2 * err_norm + 0.8 * cls_norm
+    else:
+        combined_scores = err_norm
+        
     return combined_scores
-
 
 def score_gnn(model, X, edge_index, batch_size=4096):
     model.eval()

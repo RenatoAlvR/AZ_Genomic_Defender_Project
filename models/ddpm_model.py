@@ -412,20 +412,32 @@ class DenoisingDiffusionPM(nn.Module):
                           f"Best loss: {best_loss:.6f}")
                     break
 
-    def detect(self, x: np.ndarray) -> np.ndarray:
-        """Detect injected noise via reconstruction error at detection_timestep."""
+    def detect(self, x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Detect injected noise returning both reconstruction error and classifier probability."""
         self.eval()
         x_tensor   = torch.tensor(x, dtype=torch.float32,
-                                   device=self.config['device'])
+                                device=self.config['device'])
         batch_size = x_tensor.shape[0]
         t = torch.full((batch_size,), self.detection_timestep,
                         device=self.config['device'], dtype=torch.long)
+            
         with torch.no_grad():
+            # 1. Diffusion Reconstruction Pass
             x_t             = self.q_sample(x_start=x_tensor, t=t)
-            predicted_noise  = self.model(x_t, t)
+            predicted_noise = self.model(x_t, t)
             x_0_pred        = self.predict_start_from_noise(x_t, t, predicted_noise)
-            anomaly_score   = torch.mean((x_tensor - x_0_pred) ** 2, dim=1)
-        return anomaly_score.cpu().numpy()
+            recon_error     = torch.mean((x_tensor - x_0_pred) ** 2, dim=1)
+                
+            # 2. Classifier Probability Pass
+            if hasattr(self.model, 'encode'):
+                latent     = self.model.encode(x_t, t)
+                cls_logits = self.classifier(latent).squeeze(-1)
+                cls_probs  = torch.sigmoid(cls_logits)
+            else:
+                # Fallback for models without a classifier head (e.g., UNet1D)
+                cls_probs  = torch.zeros(batch_size, device=self.config['device'])
+                    
+        return recon_error.cpu().numpy(), cls_probs.cpu().numpy()
 
     def reconstruct(self, x: np.ndarray) -> np.ndarray:
         """Reconstruct input via partial denoising."""
