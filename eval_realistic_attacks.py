@@ -78,20 +78,49 @@ def score_cae(model, X, batch_size=2048):
 
 def score_ddpm(model, X, batch_size=256):
     model.eval()
-    scores = []
+    all_err = []
+    all_cls = []
+    
     with torch.no_grad():
         for i in range(0, len(X), batch_size):
             b = torch.tensor(X[i:i+batch_size], dtype=torch.float32,
                              device=model.config['device'])
             t = torch.full((len(b),), model.detection_timestep,
                            device=model.config['device'], dtype=torch.long)
+            
+            # 1. Diffusion Pass (Reconstruction)
             x_t   = model.q_sample(x_start=b, t=t)
             pred  = model.model(x_t, t)
             x0    = model.predict_start_from_noise(x_t, t, pred)
             err   = torch.mean((b - x0)**2, dim=1)
-            scores.append(err.cpu().numpy())
-            del b, x_t, pred, x0, err; torch.cuda.empty_cache()
-    return np.concatenate(scores)
+            
+            # 2. Classifier Pass
+            # NOTE: Adapt the input here based on what your classifier head expects.
+            # If it processes the raw input, leave it as 'b'. 
+            # If it processes the noisy state or denoised state, change to 'x_t' or 'x0'.
+            cls_logits = model.classifier(b) 
+            cls_probs  = torch.sigmoid(cls_logits).squeeze(-1)
+            
+            all_err.append(err.cpu().numpy())
+            all_cls.append(cls_probs.cpu().numpy())
+            
+            del b, x_t, pred, x0, err, cls_logits, cls_probs; torch.cuda.empty_cache()
+            
+    # Concatenate all batches
+    err_arr = np.concatenate(all_err)
+    cls_arr = np.concatenate(all_cls)
+    
+    # 3. Global Normalization
+    # Z-score normalize both arrays so the unbounded MSE doesn't drown out the 0-1 probabilities.
+    err_norm = (err_arr - err_arr.mean()) / (err_arr.std() + 1e-8)
+    cls_norm = (cls_arr - cls_arr.mean()) / (cls_arr.std() + 1e-8)
+    
+    # 4. Blend the Scores
+    # We heavily weight the classifier (80%) since the pure diffusion reconstruction 
+    # previously inverted the AUROC, but we keep a 20% structural penalty from the MSE.
+    combined_scores = 0.2 * err_norm + 0.8 * cls_norm
+    
+    return combined_scores
 
 
 def score_gnn(model, X, edge_index, batch_size=4096):
