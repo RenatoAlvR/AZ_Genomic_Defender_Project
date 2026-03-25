@@ -149,7 +149,7 @@ def ensemble_score(scores_dict):
     """Weighted ensemble based on benchmark results.
     CAE weight = 0 (degrades performance when trained without negatives).
     """
-    weights = {'vae': 0.40, 'ddpm': 0.40, 'gnn_ae': 0.20, 'cae': 0.00}
+    weights = {'vae': 0.10, 'ddpm': 0.40, 'gnn_ae': 0.10, 'cae': 0.40}
     norm    = []
     for name, s in scores_dict.items():
         w = weights.get(name, 0.0)
